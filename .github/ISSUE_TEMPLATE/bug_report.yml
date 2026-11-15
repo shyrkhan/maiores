@@ -1,0 +1,32 @@
+name: Something is wrong
+description: The program did something it should not, or crashed.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time. **Please do not attach your real family tree** — it is about other people too.
+        Describe the problem instead, or show it on the sample family ("Try a sample family" on the start page).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, step by step, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Help → About shows it.
+      placeholder: "1.3.2"
+  - type: dropdown
+    id: system
+    attributes:
+      label: Computer
+      options: [Windows, Mac (Apple chip), Mac (Intel), Linux, Other]
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: A screenshot, or the text of an error message, helps a lot.

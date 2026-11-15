@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+# Real family data never goes into the code repository.
+*.tree/
+dist/
+build/
+dev-output/

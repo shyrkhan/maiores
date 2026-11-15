@@ -1,0 +1,82 @@
+## Maiores 1.4
+
+**Family Tree is now Maiores** — Latin for "the ancestors". Same program, new name and a
+new logo: an M drawn as a family, two ancestors whose lines meet at their child.
+Settings carry over by themselves, your trees stay where they were, and the installer
+updates the old program instead of adding a second one.
+
+### New in 1.4
+
+- **DNA**: record DNA tests and matches; import match lists and segment files from
+  MyHeritage, FamilyTreeDNA, GEDmatch and 23andMe; see what a shared amount could mean
+  and whether your tree agrees with it; a chromosome map; and compare two relatives' raw
+  DNA files on your own computer. DNA never leaves your computer.
+- **Nothing lost from other programs' files** (since 1.3.2): GEDCOM files from MyHeritage,
+  Family Tree Maker, Ancestry, Findmypast and Gramps come in whole, and what the program
+  does not use is written back unchanged.
+
+## Earlier: 1.3.2
+
+**Nothing lost from other programs' files.** A family tree file from MyHeritage, Family
+Tree Maker, Ancestry, Findmypast or Gramps now comes in whole: what this program uses is
+read, and everything else is kept with the person, family or source it belongs to and
+written back unchanged when you export. Tested line by line on 38 real files.
+
+- Newly understood: adoptive and step parents (Family Tree Maker, Ancestry), titles,
+  nationality, immigration, census, confirmation, first communion, will, probate and
+  other standard events; cause of death, age and address at an event; citation text;
+  years before 1000; names exactly as written.
+- The side panel shows the rest under "Other details from ...".
+- Fixed: long titles and names split over two lines lost a space or a surname; a few
+  kinds of repeated citations and names were dropped.
+
+## Earlier: 1.3.1
+
+Fixes one mistake in 1.3.0 and earlier: linking someone as a brother or sister when they
+already stood with brothers and sisters whose parents weren't known left them with two
+birth families. Now the whole group joins, each keeping their own link.
+
+## Earlier: 1.3
+
+Trees saved by 1.3 still open in 1.1 and 1.2. The one exception: a person given an
+old-calendar date or a date range in 1.3 can be looked at in 1.2, but 1.2 won't save
+changes to that person until it is updated.
+
+### New in 1.3
+
+- **Looks**: themes (dark, light, old paper, or as the computer is set), nicer cards
+  with initials or silhouettes, square, rounded or curved lines, colours by family side
+  or surname, soft shadows, a cross for those who have died. All in Preferences.
+- **Family lines**: View > Highlight a family line (Ctrl+B), or right-click someone.
+  Everyone born with that surname stays clear and is joined by gold lines; everyone else
+  fades, as much as you like. "Only this line" shows just that line from its first known
+  ancestor.
+- **Birth surnames on cards**: "Vesna Radić, rođ. Lukač", with each language's own
+  word (geb., née, z d., roz. ...). Preferences can show the birth surname instead.
+- **Folding both ways**: on a line from someone's parents, ˄ folds everything above away
+  and ˅ folds that level's aunts, uncles and cousins onto the direct line.
+- **New views**: Lifelines (everyone's life on a timeline over the states and wars of the
+  time), Gallery (every picture in one place), Statistics with charts.
+- **Moving around**: toolbar pictures, gliding to a person, View > Overview map, and the
+  start page shows your trees as cards.
+- **Old calendars and date ranges**: Julian dates, double years (1700/01) and periods
+  ("from 1920 to 1935").
+- **Sharing**: File > Share as a web page (one file anyone can open in a browser, with an
+  optional password), and Share on this network (relatives on the same Wi-Fi open it on a
+  phone by scanning a code; it stops when you close it).
+- **Importing from other programs**: married names from MyHeritage and Family Tree Maker
+  come in as current and birth surnames. Very large files (tens of thousands of people)
+  import, open and export quickly.
+
+### Which file to download
+
+| Computer | File |
+|---|---|
+| Windows 10 or 11 | `Maiores.1.4.0.setup.exe` |
+| Mac with an Apple chip (M1 and newer) | `Maiores.1.4.0.Apple.chip.dmg` |
+| Older Mac with an Intel chip | `Maiores.1.4.0.Intel.dmg` |
+| Ubuntu, Debian, Mint | `maiores_1.4.0_amd64.deb` |
+
+The `.zip` and `.tar.gz` files are the same program without an installer. The installers
+are not signed yet: on Windows choose "More info" → "Run anyway"; on a Mac right-click the
+app → "Open".
