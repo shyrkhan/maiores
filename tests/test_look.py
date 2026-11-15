@@ -434,3 +434,24 @@ class RenameTests(unittest.TestCase):
         self.assertTrue(branding.small_icon_uri().startswith("data:image/png;base64,"))
         page = reports.descendant_book(sample_tree(), "ante", 3)
         self.assertIn(branding.small_icon_uri()[:60], page)
+
+
+class SupportLinkTests(unittest.TestCase):
+    def test_help_menu_opens_the_report_form_and_the_support_page(self):
+        import datetime
+        import tempfile
+        from unittest import mock
+        from PySide6.QtCore import QSettings
+        import app as app_module
+        with tempfile.TemporaryDirectory() as folder:
+            window = app_module.MainWindow(QSettings(str(Path(folder) / "s.ini"), QSettings.Format.IniFormat),
+                                           today=datetime.date(2026, 11, 15))
+            opened = []
+            actions = {a.text(): a for menu in window.menuBar().actions() if menu.menu()
+                       for a in menu.menu().actions()}
+            with mock.patch.object(app_module.QDesktopServices, "openUrl", lambda url: opened.append(url.toString())):
+                actions["&Report a problem or idea..."].trigger()
+                actions["Su&pport Maiores..."].trigger()
+            self.assertEqual(opened, ["https://github.com/shyrkhan/maiores/issues/new/choose",
+                                      "https://paypal.me/shyrkhan"])
+            window.close()

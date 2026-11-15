@@ -189,6 +189,8 @@ def default_trees_folder():
 
 
 PROJECT_URL = "https://github.com/shyrkhan/maiores"
+REPORT_URL = PROJECT_URL + "/issues/new/choose"  # The bug and idea forms.
+SUPPORT_URL = "https://paypal.me/shyrkhan"
 
 
 def _bring_old_settings():
@@ -486,6 +488,9 @@ class MainWindow(QMainWindow):
         add(help_menu, t("menu_guide"), self.show_guide, QKeySequence(Qt.Key.Key_F1))
         self.tour_action = add(help_menu, t("menu_tour"), self.start_tour)
         add(help_menu, t("menu_shortcuts"), self.show_shortcuts)
+        help_menu.addSeparator()
+        add(help_menu, t("menu_report"), lambda: QDesktopServices.openUrl(QUrl(REPORT_URL)))
+        add(help_menu, t("menu_support"), lambda: QDesktopServices.openUrl(QUrl(SUPPORT_URL)))
         add(help_menu, t("menu_about"), self.show_about, role=Role.AboutRole)
 
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, activated=self._delete_selected)
@@ -1143,7 +1148,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         layout.addWidget(start_cards.BrandHeader(t("app_tagline"), height=76))
         about = QLabel(f"<p>{t('about_text', version=VERSION)}</p><p>{t('about_free')}</p>"
-                       f"<p>{t('about_project', link=f'<a href=\"{PROJECT_URL}\">{PROJECT_URL}</a>')}</p>")
+                       f"<p>{t('about_project', link=f'<a href=\"{PROJECT_URL}\">{PROJECT_URL}</a>')}</p>"
+                       f"<p>{t('about_support', link=f'<a href=\"{SUPPORT_URL}\">{SUPPORT_URL}</a>')}</p>")
         about.setOpenExternalLinks(True)
         about.setWordWrap(True)
         layout.addWidget(about)
