@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""An MCP server (stdio, JSON-RPC 2.0, one message per line) over the developer-mode
+remote control (devtools/devmode.py, devtools/drive.py). Standard library only.
+
+    claude mcp add --scope user maiores -- python3 /path/to/maiores/tools/maiores-mcp
+
+maiores_launch starts a hidden copy: offscreen, CPU-capped, with its own home
+folder (so it never sees the real trees or settings) and no map pictures from the internet, opening the made-up family
+or a tree you name. Every other tool takes "instance": "hidden" (the default
+while one runs) or "live" (a copy someone started with `python app.py --dev`).
+"""
+import getpass
+import json
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+PYTHON = ROOT / ".venv" / "bin" / "python"
+STATE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "maiores-mcp"
+HOME = STATE / "home"
+PID_FILE = STATE / "hidden.pid"
+LOG_FILE = STATE / "hidden.log"
+HIDDEN_SOCKET = str(STATE / "hidden.sock")
+LIVE_SOCKET = os.path.join(tempfile.gettempdir(), f"maiores-dev-{getpass.getuser()}")
+CAP = ["systemd-run", "--user", "--scope", "-q", "-p", "CPUQuota=640%", "-p", "MemoryMax=3G", "nice", "-n", "19"]
+
+
+# Talking to a running copy.
+def hidden_pid():
+    try:
+        pid = int(PID_FILE.read_text())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def socket_for(instance):
+    if instance in (None, "", "hidden"):
+        if hidden_pid() and os.path.exists(HIDDEN_SOCKET):
+            return HIDDEN_SOCKET
+        if instance == "hidden":
+            raise RuntimeError("no hidden Maiores runs; call maiores_launch first")
+        if os.path.exists(LIVE_SOCKET):
+            return LIVE_SOCKET
+        raise RuntimeError("no Maiores is reachable: call maiores_launch, or start one with `python app.py --dev`")
+    if instance == "live":
+        return LIVE_SOCKET
+    raise RuntimeError("instance is hidden or live")
+
+
+def call(instance, command, arg=None, timeout=60):
+    path = socket_for(instance)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        try:
+            s.connect(path)
+        except OSError as e:
+            raise RuntimeError(f"cannot reach Maiores at {path}: {e}") from None
+        s.sendall(json.dumps({"cmd": command, "arg": arg}, ensure_ascii=False).encode() + b"\n")
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = s.recv(1 << 20)
+            if not chunk:
+                break
+            data += chunk
+    reply = json.loads(data)
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error"))
+    return reply["result"]
+
+
+# Starting and stopping the hidden copy.
+def prepare_home(fresh):
+    if fresh and HOME.exists():
+        shutil.rmtree(HOME)
+    config = HOME / ".config" / "Maiores"
+    config.mkdir(parents=True, exist_ok=True)
+    conf = config / "Maiores.conf"
+    if not conf.exists():
+        # No first-run tour over the picture, and no tree reopened from an earlier run.
+        conf.write_text("[General]\nfirst_tour=done\nreopen_last_tree=false\nmap_tiles_allowed=no\n")
+    (HOME / "Documents").mkdir(exist_ok=True)
+
+
+def launch(args):
+    if hidden_pid():
+        stop()
+    STATE.mkdir(parents=True, exist_ok=True)
+    prepare_home(bool(args.get("fresh")))
+    tree = args.get("tree")
+    command = [str(PYTHON), str(ROOT / "app.py"), "--dev"]
+    if not tree and args.get("editable"):
+        # A copy of the made-up family as a real tree in the hidden home, so edits can be tried and saved.
+        tree = HOME / "Documents" / "Maiores" / "Made-up family"
+        if not tree.exists():
+            env = dict(os.environ, QT_QPA_PLATFORM="offscreen", HOME=str(HOME))
+            subprocess.run([str(PYTHON), "-c", "import sys; from pathlib import Path; from storage import create_tree; "
+                            "from sample import sample_tree; create_tree(Path(sys.argv[1]), sample_tree())", str(tree)],
+                           cwd=ROOT, env=env, check=True, capture_output=True)
+    if tree:
+        command.append(str(Path(tree).expanduser()))
+    elif args.get("sample", True):
+        command.append("--sample")
+    if args.get("language"):
+        command += ["--language", args["language"]]
+    if args.get("theme"):
+        command += ["--theme", args["theme"]]
+    env = dict(os.environ, HOME=str(HOME), XDG_CONFIG_HOME=str(HOME / ".config"),
+               XDG_DATA_HOME=str(HOME / ".local" / "share"), XDG_CACHE_HOME=str(HOME / ".cache"),
+               QT_QPA_PLATFORM="offscreen", FT_STILL="1", MAIORES_DEV_SOCKET=HIDDEN_SOCKET)
+    env.pop("XDG_DOCUMENTS_DIR", None)
+    # Links and files it opens (Report a problem, an exported report) must not reach the real desktop:
+    # a stand-in xdg-open only writes them to the log, and the app gets no display or session bus.
+    # systemd-run still needs the bus itself, so it is taken away just around the program.
+    fake = HOME / "bin"
+    fake.mkdir(exist_ok=True)
+    (fake / "xdg-open").write_text('#!/bin/sh\necho "[would open] $*"\n')
+    (fake / "xdg-open").chmod(0o755)
+    command = ["env", "-u", "DBUS_SESSION_BUS_ADDRESS", "-u", "DISPLAY", "-u", "WAYLAND_DISPLAY",
+               f"PATH={fake}:{env.get('PATH', '/usr/bin:/bin')}"] + command
+    if os.path.exists(HIDDEN_SOCKET):
+        os.unlink(HIDDEN_SOCKET)
+    log = open(LOG_FILE, "w")
+    capped = CAP if shutil.which("systemd-run") else ["nice", "-n", "19"]
+    process = subprocess.Popen(capped + command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                               stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    PID_FILE.write_text(str(process.pid))
+    deadline = time.time() + 40
+    while time.time() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("Maiores stopped while starting:\n" + LOG_FILE.read_text()[-3000:])
+        if os.path.exists(HIDDEN_SOCKET):
+            try:
+                state = call("hidden", "state")
+                size = args.get("size")
+                if size:
+                    call("hidden", "resize", size)
+                return f"hidden Maiores running (pid {process.pid}), home {HOME}\n" + json.dumps(state, ensure_ascii=False, indent=1)
+            except RuntimeError:
+                pass
+        time.sleep(0.3)
+    raise RuntimeError("Maiores did not answer within 40 s; log:\n" + LOG_FILE.read_text()[-3000:])
+
+
+def stop():
+    pid = hidden_pid()
+    if not pid:
+        return "no hidden Maiores was running"
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except OSError:
+        os.kill(pid, signal.SIGTERM)
+    for _ in range(30):
+        if not hidden_pid():
+            break
+        time.sleep(0.1)
+    else:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    PID_FILE.unlink(missing_ok=True)
+    if os.path.exists(HIDDEN_SOCKET):
+        os.unlink(HIDDEN_SOCKET)
+    return f"stopped the hidden Maiores (pid {pid})"
+
+
+def status():
+    out = {"hidden": None, "live": None}
+    if hidden_pid():
+        out["hidden"] = {"pid": hidden_pid(), "home": str(HOME), "log": str(LOG_FILE)}
+    if os.path.exists(LIVE_SOCKET):
+        try:
+            call("live", "state", timeout=3)
+            out["live"] = "reachable (python app.py --dev)"
+        except RuntimeError as e:
+            out["live"] = f"socket there but not answering: {e}"
+    return out
+
+
+def run_checks(args):
+    kind = args.get("kind", "quick")
+    flags = {"quick": ["--quick"], "full": [], "seeds": ["--seeds"], "steps": ["--steps"], "perf": ["--perf"],
+             "fuzz": ["--fuzz"], "leaks": ["--leaks"], "sweep": ["--sweep"]}.get(kind)
+    if flags is None:
+        raise RuntimeError("kind is quick, full, seeds, steps, perf, fuzz, leaks or sweep")
+    capped = CAP if shutil.which("systemd-run") else ["nice", "-n", "19"]
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", FT_STILL="1")
+    done = subprocess.run(capped + [str(PYTHON), "tools/check.py", *flags], cwd=ROOT, env=env,
+                          capture_output=True, text=True, timeout=int(args.get("timeout") or 1800))
+    out = (done.stdout + done.stderr).strip()
+    return f"exit {done.returncode}\n" + (out[-6000:] if len(out) > 6000 else out)
+
+
+# The tools.
+INSTANCE = {"instance": {"type": "string", "enum": ["hidden", "live"],
+                         "description": "hidden (default while it runs) or live"}}
+TARGET = {"target": {"type": "string", "description":
+                     "a widget: @N from maiores_widgets, name:objectName, class:QLineEdit (#2 for the second), "
+                     "text:Save or just Save; empty = the window in front (a dialog, else the main window)"}}
+WHO = {"who": {"type": "string", "description": "a person: id, end of an id, or part of the name"}}
+
+
+def tool(name, description, properties=None, required=()):
+    return {"name": name, "description": description,
+            "inputSchema": {"type": "object", "properties": {**INSTANCE, **(properties or {})}, "required": list(required)}}
+
+
+TOOLS = [
+    tool("maiores_launch", "Start a hidden Maiores (offscreen, CPU-capped, its own home folder so real trees and "
+         "settings are never touched). Opens the made-up family unless a tree folder is given. Replaces a running hidden one.",
+         {"tree": {"type": "string", "description": "a tree folder or .gedcom-free tree path to open"},
+          "sample": {"type": "boolean", "description": "open the made-up family, read-only (default when no tree)"},
+          "editable": {"type": "boolean", "description": "open an editable saved copy of the made-up family instead"},
+          "fresh": {"type": "boolean", "description": "wipe the hidden copy's home first (settings, trees made in it)"},
+          "language": {"type": "string", "description": "e.g. hr, de, en"},
+          "theme": {"type": "string", "description": "dark or light"},
+          "size": {"type": "string", "description": "window size, e.g. 1600x1000"}}),
+    tool("maiores_stop", "Close the hidden Maiores."),
+    tool("maiores_status", "Which copies can be reached: hidden, live."),
+    tool("maiores_state", "Folder, people/families, centred house, selected person, chart, zoom, undo/redo, folds, page."),
+    tool("maiores_screenshot", "A picture of the window in front, or of one widget (never the rest of the screen).", TARGET),
+    tool("maiores_windows", "The visible windows: main window, dialogs, open menus with their entries."),
+    tool("maiores_widgets", "The widget tree of the window in front (or a widget), numbered @N for later calls.",
+         {**TARGET, "depth": {"type": "integer"}, "limit": {"type": "integer"}}),
+    tool("maiores_describe", "One widget in full: text, tooltip, state, a list's rows, a combo's items, tabs.", TARGET),
+    tool("maiores_click", "Click a widget; x/y inside it. Delivered after the reply: wait, then look.",
+         {**TARGET, "button": {"type": "string", "enum": ["left", "right", "middle"]}, "double": {"type": "boolean"},
+          "x": {"type": "integer"}, "y": {"type": "integer"}}, ["target"]),
+    tool("maiores_key", "Press keys (Ctrl+Z, Esc, Return, Ctrl+Shift+O) on a widget or the one with focus.",
+         {**TARGET, "keys": {"type": "string"}}, ["keys"]),
+    tool("maiores_type", "Type text into a widget or the one with focus.", {**TARGET, "text": {"type": "string"}}, ["text"]),
+    tool("maiores_set", "Fill a field directly: line edit, text box, combo (by item text), spin box, slider, check box.",
+         {**TARGET, "value": {"type": "string"}}, ["target", "value"]),
+    tool("maiores_menu", "Run a menu entry by path, e.g. 'File/Export/GEDCOM' or 'Person/Add child'; with an open "
+         "context menu, an entry of that menu. A path ending at a submenu lists its entries.",
+         {"path": {"type": "string"}}, ["path"]),
+    tool("maiores_close", "Close the dialog or menu in front (cancel, or accept=true for OK).", {"accept": {"type": "boolean"}}),
+    tool("maiores_people", "The people on screen: id, name, position, selected."),
+    tool("maiores_person", "Everything stored about one person (default: the selected one).", WHO),
+    tool("maiores_select", "Select a person and bring them into view.", WHO, ["who"]),
+    tool("maiores_click_person", "Click a card on the tree as a mouse would (right = its context menu).",
+         {**WHO, "button": {"type": "string", "enum": ["left", "right"]}, "double": {"type": "boolean"}}, ["who"]),
+    tool("maiores_action", "Run a person action (add_child, add_parent, add_partner, edit, centre, collapse, dna, "
+         "family_line, ancestors, …) on someone or the selected person. Its dialog opens after the reply.",
+         {**WHO, "key": {"type": "string"}}, ["key"]),
+    tool("maiores_open", "Open a tree folder in the running copy.", {"path": {"type": "string"}}, ["path"]),
+    tool("maiores_sample", "Show the made-up family."),
+    tool("maiores_history", "undo, redo or go_back.", {"do": {"type": "string", "enum": ["undo", "redo", "go_back"]}}, ["do"]),
+    tool("maiores_checks", "Run the tree and layout checks (devtools/checks.py) on what is shown now; failures listed."),
+    tool("maiores_fit", "Check that every text fits its card."),
+    tool("maiores_overlay", "Draw card boxes, ids, family head and line ends over the tree.", {"on": {"type": "boolean"}}),
+    tool("maiores_log", "Recent developer-mode log lines (and, for hidden, the program's own output).", {"lines": {"type": "integer"}}),
+    tool("maiores_wait", "Let the program run for some milliseconds (dialogs opening, layouts, timers).", {"ms": {"type": "integer"}}),
+    tool("maiores_test", "Run the automatic test suite tools/check.py (CPU-capped, offscreen). kind: quick (default), "
+         "full, seeds, steps, perf, fuzz, leaks, sweep.", {"kind": {"type": "string"}, "timeout": {"type": "integer"}}),
+]
+
+
+def text(value):
+    return {"content": [{"type": "text", "text": value if isinstance(value, str)
+                         else json.dumps(value, ensure_ascii=False, indent=1)}]}
+
+
+def picture(result):
+    return {"content": [{"type": "image", "data": result["png"], "mimeType": "image/png"},
+                        {"type": "text", "text": f"{result['of']} {result['width']}×{result['height']}"}]}
+
+
+def run(name, args):
+    args = dict(args)
+    where = args.pop("instance", None)
+    if name == "maiores_launch":
+        return text(launch(args))
+    if name == "maiores_stop":
+        return text(stop())
+    if name == "maiores_status":
+        return text(status())
+    if name == "maiores_test":
+        return text(run_checks(args))
+    if name == "maiores_wait":
+        time.sleep(min(int(args.get("ms") or 500), 30000) / 1000)
+        return text("waited")
+    if name == "maiores_screenshot":
+        return picture(call(where, "picture", {"target": args.get("target", "")}))
+    if name == "maiores_log":
+        lines = int(args.get("lines") or 40)
+        out = "\n".join(call(where, "log", str(lines)))
+        if (where in (None, "", "hidden")) and hidden_pid() and LOG_FILE.exists():
+            noise = ("This plugin does not support",)  # The offscreen platform's harmless notes.
+            tail = [l for l in LOG_FILE.read_text(errors="replace").splitlines() if not l.startswith(noise)][-lines:]
+            out += "\n--- program output ---\n" + "\n".join(tail)
+        return text(out)
+    if name == "maiores_people":
+        rows = call(where, "people")
+        return text("\n".join(f"{'* ' if r['selected'] else '  '}{r['id']}: {r['name']} at {r['x']},{r['y']}" for r in rows)
+                    or "nobody on screen")
+    simple = {"maiores_state": ("state", None), "maiores_checks": ("checks", None), "maiores_fit": ("fit", None),
+              "maiores_sample": ("sample", {}),
+              "maiores_windows": ("windows", {})}
+    if name in simple:
+        return text(call(where, *simple[name]))
+    if name == "maiores_select":
+        return text(call(where, "select", args["who"]))
+    if name == "maiores_history":
+        return text(call(where, args["do"]))
+    if name == "maiores_overlay":
+        return text(call(where, "overlay", "on" if args.get("on", True) else "off"))
+    mapped = {"maiores_widgets": "widgets", "maiores_describe": "describe", "maiores_click": "click",
+              "maiores_key": "key", "maiores_type": "type", "maiores_set": "set", "maiores_menu": "menu",
+              "maiores_close": "close", "maiores_person": "person", "maiores_click_person": "click_person",
+              "maiores_action": "action", "maiores_open": "open"}
+    if name in mapped:
+        if name == "maiores_open":
+            args["path"] = str(Path(args["path"]).expanduser())
+        return text(call(where, mapped[name], args))
+    raise RuntimeError(f"unknown tool {name}")
+
+
+INSTRUCTIONS = ("Drive and inspect Maiores (the family-tree program) through its developer-mode remote control. "
+                "Start a hidden copy with maiores_launch (own home folder, made-up family by default), or use "
+                "instance=live for one started with `python app.py --dev`. Clicks, keys, menus and actions are "
+                "delivered after the reply: call maiores_wait (300-800 ms) before looking again. "
+                "Call maiores_stop when done.")
+
+
+def reply(message_id, result=None, error=None):
+    out = {"jsonrpc": "2.0", "id": message_id}
+    if error is not None:
+        out["error"] = error
+    else:
+        out["result"] = result
+    sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except ValueError:
+            reply(None, error={"code": -32700, "message": "parse error"})
+            continue
+        method, mid = message.get("method"), message.get("id")
+        if mid is None:
+            continue
+        params = message.get("params") or {}
+        if method == "initialize":
+            reply(mid, {"protocolVersion": params.get("protocolVersion", "2025-06-18"), "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "maiores", "version": "0.1"}, "instructions": INSTRUCTIONS})
+        elif method == "ping":
+            reply(mid, {})
+        elif method == "tools/list":
+            reply(mid, {"tools": TOOLS})
+        elif method == "tools/call":
+            try:
+                reply(mid, run(params.get("name"), params.get("arguments") or {}))
+            except Exception as e:  # A tool's failure is its answer, not a protocol error.
+                reply(mid, {"content": [{"type": "text", "text": f"error: {e}"}], "isError": True})
+        else:
+            reply(mid, error={"code": -32601, "message": f"no method {method}"})
+
+
+if __name__ == "__main__":
+    main()

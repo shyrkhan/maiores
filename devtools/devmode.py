@@ -17,6 +17,7 @@ The release builds leave this file out, so `--dev` does nothing there.
 import datetime
 import getpass
 import json
+import os
 import time
 import traceback
 from pathlib import Path
@@ -37,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from canvas import LinesItem
+from devtools.drive import Driver
 from devtools.checks import FAIL, failures, fit_problems, run_checks
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,7 +47,8 @@ LOG_LIMIT = 500
 
 
 def server_name():
-    return f"maiores-dev-{getpass.getuser()}"
+    """The remote control's name; MAIORES_DEV_SOCKET gives a second copy its own."""
+    return os.environ.get("MAIORES_DEV_SOCKET") or f"maiores-dev-{getpass.getuser()}"
 
 
 class OverlayItem(QGraphicsItem):
@@ -94,6 +97,7 @@ class OverlayItem(QGraphicsItem):
 class DevMode:
     def __init__(self, window, serve=True):
         self.window = window
+        self.driver = Driver(window)
         self.overlay_on = False
         self.overlay = None
         self.log_lines = []
@@ -322,6 +326,54 @@ class DevMode:
 
     def _command(self, command, arg):
         w = self.window
+        a = arg if isinstance(arg, dict) else {}
+        d = self.driver
+        # Seeing and driving it like a person (drive.py); arg is a dict here.
+        if command == "windows":
+            return d.windows()
+        if command == "widgets":
+            return d.widgets(a.get("target", ""), int(a.get("depth") or 6), int(a.get("limit") or 250))
+        if command == "describe":
+            from devtools.drive import describe
+            return describe(d.find(a.get("target", "")))
+        if command == "picture":
+            return d.picture(a.get("target", ""))
+        if command == "click":
+            return d.click(a.get("target", ""), a.get("button"), bool(a.get("double")), a.get("x"), a.get("y"))
+        if command == "key":
+            return d.key(a["keys"], a.get("target", ""))
+        if command == "type":
+            return d.type(a["text"], a.get("target", ""))
+        if command == "set":
+            return d.set_value(a["target"], str(a["value"]))
+        if command == "menu":
+            return d.menu(a["path"])
+        if command == "close":
+            return d.close_front(bool(a.get("accept")))
+        if command == "click_person":
+            pid = self.find_person(a.get("who", ""))
+            if pid is None:
+                raise ValueError(f"nobody matches {a.get('who')!r}")
+            return d.click_person(pid, a.get("button"), bool(a.get("double")))
+        if command == "open":
+            d.later(lambda: w.open_path(a["path"]))
+            return f"opening {a['path']}"
+        if command == "resize":
+            width, _, height = str(arg).lower().partition("x")
+            w.resize(int(width), int(height))
+            return [w.width(), w.height()]
+        if command == "sample":
+            d.later(w.load_sample)
+            return "opening the made-up family"
+        if command == "person":
+            pid = self.find_person(a.get("who", "")) if a.get("who") else w.selected
+            if pid is None:
+                raise ValueError("nobody selected or matched")
+            return {"id": pid, **w.tree.people[pid].to_dict()}
+        if command == "action" and isinstance(arg, dict):
+            pid = self.find_person(a["who"]) if a.get("who") else w.selected
+            d.later(lambda: w.run_action(a["key"], pid))
+            return f"running {a['key']} on {self.name(pid)}"
         if command == "state":
             return self.state()
         if command == "checks":
@@ -357,7 +409,9 @@ class DevMode:
             return self.log_lines[-int(arg or 40):]
         raise ValueError(
             "unknown command; try state, checks, people, screenshot [PATH], select NAME, "
-            "action KEY [NAME], fit, overlay on|off, undo, redo, go_back, log [N]"
+            "action KEY [NAME], fit, overlay on|off, undo, redo, go_back, log [N]; "
+            "with a dict argument: windows, widgets, describe, picture, click, key, type, set, menu, close, "
+            "click_person, open, sample, person"
         )
 
 

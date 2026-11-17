@@ -931,6 +931,13 @@ def date_warnings(tree, person_id, today, index=None):
             grace = 0 if parent.sex == "F" else 1
             if d_late is not None and born_early is not None and born_early > d_late + grace:
                 warnings.append(t("warn_born_after_parent_died", parent=parent.display_name, child=name))
+    # Found by the MCP sweep: a birth in 2090 was taken without a word. A year after this one
+    # cannot be right, however the date is read.
+    if born_early is not None and born_early > today.year:
+        warnings.append(t("warn_born_future", name=name, year=born_early))
+    died_early, _died_late = _year_bounds(person.death_date)
+    if died_early is not None and died_early > today.year:
+        warnings.append(t("warn_died_future", name=name, year=died_early))
     if person.living == "yes" and born_late is not None and today.year - born_late > 110:
         warnings.append(t("warn_too_old", name=name, age=today.year - born_late))
     for family in index.families_of(person_id):

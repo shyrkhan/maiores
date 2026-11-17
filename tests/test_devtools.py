@@ -110,3 +110,64 @@ class DevModeTests(WindowCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DriveTests(WindowCase):
+    """The commands tools/maiores-mcp uses: see and drive the window like a person."""
+
+    def setUp(self):
+        super().setUp()
+        create_tree(self.folder, sample_tree())
+        self.window.open_path(self.folder)
+        self.dev = devmode.install(self.window, serve=False)
+
+    ask = DevModeTests.ask
+
+    def settle(self):
+        from PySide6.QtWidgets import QApplication
+        for _ in range(3):
+            QApplication.processEvents()
+
+    def test_picture_menu_and_widgets(self):
+        picture = self.ask("picture", {})["result"]
+        self.assertGreater(len(picture["png"]), 1000)
+        entries = self.ask("menu", {"path": "Person"})["result"]["entries"]
+        self.assertTrue(any("child" in e.lower() for e in entries))
+        listing = self.ask("widgets", {"depth": 3})["result"]
+        self.assertIn("@0 MainWindow", listing)
+        self.assertFalse(self.ask("menu", {"path": "No such menu"})["ok"])
+
+    def test_set_picks_the_exact_item_first(self):
+        from devtools.drive import Driver
+        combo = QComboBox(self.window)
+        combo.setObjectName("sex_test")
+        combo.addItems(["Unknown", "Female", "Male"])
+        combo.show()
+        self.addCleanup(combo.deleteLater)
+        Driver(self.window).set_value("name:sex_test", "Male")
+        self.assertEqual(combo.currentText(), "Male")
+
+    def test_deferred_action_replies_before_its_dialog(self):
+        self.answers.people = [{"given": "Kasniji", "link": "birth"}]
+        reply = self.ask("action", {"key": "add_child", "who": "Luka"})
+        self.assertTrue(reply["ok"])
+        self.assertFalse(any(p.given == "Kasniji" for p in self.window.tree.people.values()))  # Not yet.
+        self.settle()
+        self.assertTrue(self.person_named("Kasniji"))
+
+    def test_the_mcp_server_speaks_the_protocol(self):
+        import subprocess
+        server = Path(__file__).resolve().parent.parent / "tools" / "maiores-mcp"
+        messages = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                    {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                     "params": {"name": "maiores_state", "arguments": {"instance": "hidden"}}}]
+        done = subprocess.run([sys.executable, str(server)], input="\n".join(json.dumps(m) for m in messages),
+                              capture_output=True, text=True, timeout=30,
+                              env=dict(os.environ, XDG_CACHE_HOME=str(self.folder / "cache")))
+        replies = [json.loads(line) for line in done.stdout.splitlines()]
+        self.assertEqual([r["id"] for r in replies], [1, 2, 3])
+        names = {t["name"] for t in replies[1]["result"]["tools"]}
+        self.assertTrue({"maiores_launch", "maiores_screenshot", "maiores_click", "maiores_menu"} <= names)
+        self.assertTrue(replies[2]["result"]["isError"])  # Nothing hidden runs in this test.

@@ -190,6 +190,15 @@ class StartPageTests(WindowCase):
         self.assertFalse(second.open_path(self.folder))
         self.assertIn("already open", answers.alerts[0])
 
+    def test_opening_the_tree_already_open_here_is_quiet(self):
+        """Found by the MCP sweep: Open recent on the tree in this window said it was open elsewhere."""
+        create_tree(self.folder, sample_tree())
+        self.assertTrue(self.window.open_path(self.folder))
+        self.window.select("luka")
+        self.assertTrue(self.window.open_path(self.folder / "tree.json"))
+        self.assertEqual(self.answers.alerts, [])
+        self.assertEqual(self.window.selected, "luka")  # Not reloaded.
+
     def test_lock_from_a_crashed_program_does_not_block_opening(self):
         create_tree(self.folder, sample_tree())
         script = (
@@ -1769,6 +1778,14 @@ class DateWarningTests(WindowCase):
         kid = self.make("1986", parent_born="1950", parent_died="1985")
         self.assertEqual(self.warnings(kid), [])
 
+    def test_dates_after_today_are_flagged(self):
+        """Found by the MCP sweep: a birth in 2090 was accepted without a word."""
+        kid = self.make(str(TODAY.year + 64), parent_born="1950")
+        self.assertTrue(any("after today" in w for w in self.warnings(kid)), self.warnings(kid))
+
+    def test_a_birth_this_year_is_fine(self):
+        self.assertEqual(self.warnings(self.make(str(TODAY.year), parent_born="1950")), [])
+
     def test_check_dates_lists_and_goes_to_the_person(self):
         kid = self.make("1950", parent_born="1960")
         self.answers.choices = [0]
@@ -2851,6 +2868,49 @@ class HelpTests(WindowCase):
                 view = QRect(self.window.view.viewport().mapTo(self.window, QPoint(0, 0)),
                              self.window.view.viewport().size())
                 self.assertTrue(view.contains(rect), key)
+
+    def test_tour_buttons_are_whole_and_the_bubble_leaves_its_card_visible(self):
+        """Found by the MCP sweep: "Don't show again" was cut short, and on the fan and
+        pedigree charts the bubble sat on top of the big card it was explaining."""
+        import strings
+        self.open_sample()
+        self.window.resize(1500, 950)
+        for chart in ("family", "fan", "pedigree"):
+            self.window.chart_actions[chart].trigger()
+            QApplication.processEvents()
+            for code in ("en", "de", "hr"):
+                strings.set_language(code, [])
+                try:
+                    self.window.start_tour()
+                    tour = self.window.tour
+                    QApplication.processEvents()
+                    for button in (tour.never_button, tour.skip_button, tour.back_button, tour.next_button):
+                        self.assertGreaterEqual(button.width(), button.sizeHint().width(), (chart, code, button.text()))
+                    card = tour.target()
+                    bubble = tour.bubble.geometry()
+                    overlap = bubble.intersected(card)
+                    covered = overlap.width() * overlap.height() if overlap.isValid() else 0
+                    self.assertLess(covered, 0.5 * card.width() * card.height(), (chart, code))
+                    tour.next_button.click()  # Step 2 points elsewhere; the bubble must still be whole.
+                    tour.finish()
+                    QApplication.processEvents()
+                    QApplication.processEvents()
+                finally:
+                    strings.set_language("en", [])
+        # The tour left open while the chart changes underneath: the bubble must follow its card.
+        self.window.chart_actions["family"].trigger()
+        self.window.start_tour()
+        QApplication.processEvents()
+        for chart in ("fan", "pedigree"):
+            self.window.chart_actions[chart].trigger()
+            self.window.tour.update()
+            QApplication.processEvents()
+            tour = self.window.tour
+            self.assertEqual(tour.placed_for, tour.target(), chart)  # Placed for the card as it is now.
+            overlap = tour.bubble.geometry().intersected(tour.target())
+            covered = overlap.width() * overlap.height() if overlap.isValid() else 0
+            self.assertLess(covered, 0.5 * tour.target().width() * tour.target().height(), chart)
+        self.window.tour.finish()
 
     def test_skip_closes_for_now_and_dont_show_again_is_kept(self):
         self.open_sample()

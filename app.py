@@ -489,7 +489,7 @@ class MainWindow(QMainWindow):
         self.tour_action = add(help_menu, t("menu_tour"), self.start_tour)
         add(help_menu, t("menu_shortcuts"), self.show_shortcuts)
         help_menu.addSeparator()
-        add(help_menu, t("menu_report"), lambda: QDesktopServices.openUrl(QUrl(REPORT_URL)))
+        add(help_menu, t("menu_report_problem"), lambda: QDesktopServices.openUrl(QUrl(REPORT_URL)))
         add(help_menu, t("menu_support"), lambda: QDesktopServices.openUrl(QUrl(SUPPORT_URL)))
         add(help_menu, t("menu_about"), self.show_about, role=Role.AboutRole)
 
@@ -1274,6 +1274,8 @@ class MainWindow(QMainWindow):
     def open_path(self, path):
         """Open a tree. On any failure the tree already open stays open."""
         folder = tree_folder_from(path)
+        if self.folder is not None and folder.resolve() == Path(self.folder).resolve():
+            return True  # Already open here (Open recent on itself): nothing to do, no "open elsewhere" alarm.
         lock = QLockFile(str(folder / LOCK_FILE))
         lock.setStaleLockTime(0)  # Only a dead process's lock counts as stale.
         if folder.is_dir() and not self._take_lock(lock, folder):

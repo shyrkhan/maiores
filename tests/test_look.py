@@ -455,3 +455,41 @@ class SupportLinkTests(unittest.TestCase):
             self.assertEqual(opened, ["https://github.com/shyrkhan/maiores/issues/new/choose",
                                       "https://paypal.me/shyrkhan"])
             window.close()
+
+
+class MenuLabelTests(unittest.TestCase):
+    def test_no_two_menu_entries_share_a_label(self):
+        """1.4.1 found this: the Help menu's new "Report a problem" reused the key of
+        File > Export > "Report or book", so both menus showed the same words."""
+        import datetime
+        import tempfile
+        from PySide6.QtCore import QSettings
+        import app as app_module
+        import strings
+
+        def labels(menu, trail, out):
+            for action in menu.actions():
+                if action.menu() is not None:
+                    labels(action.menu(), trail + [action.text()], out)
+                elif action.text() and not action.isSeparator():
+                    out.setdefault(action.text().replace("&", ""), []).append(" / ".join(trail))
+            return out
+
+        codes = ["en"] + sorted(p.stem for p in (Path(__file__).resolve().parent.parent / "translations").glob("*.py")
+                                if p.stem != "__init__")
+        try:
+            for code in codes:
+                strings.set_language(code, [])
+                with tempfile.TemporaryDirectory() as folder:
+                    window = app_module.MainWindow(QSettings(str(Path(folder) / "s.ini"), QSettings.Format.IniFormat),
+                                                   today=datetime.date(2026, 11, 17))
+                    found = {}
+                    for top in window.menuBar().actions():
+                        if top.menu() is not None and top.menu() is not window.person_menu:
+                            labels(top.menu(), [top.text()], found)
+                    window.close()
+                    window.deleteLater()
+                twice = {text: where for text, where in found.items() if len(where) > 1}
+                self.assertEqual(twice, {}, code)
+        finally:
+            strings.set_language("en", [])

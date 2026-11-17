@@ -47,6 +47,7 @@ class TourOverlay(QWidget):
         layout = QVBoxLayout(self.bubble)
         layout.addWidget(self.text)
         layout.addLayout(row)
+        self.row = row
         self.show()
         self.raise_()
         self.go(0)
@@ -72,21 +73,43 @@ class TourOverlay(QWidget):
         self.update()
 
     def _place_bubble(self):
+        # Wide enough for every button at full size: "Don't show again" was cut short at 340 px.
+        # Measured here, after the texts are in place, and with the style applied (a button not
+        # yet polished reports a smaller size).
+        for button in (self.counter, self.never_button, self.skip_button, self.back_button, self.next_button):
+            button.ensurePolished()
+        self.row.invalidate()
+        self.text.setFixedWidth(max(340, self.row.sizeHint().width()))
         self.bubble.adjustSize()
         target, size = self.target(), self.bubble.size()
+        self.placed_for = target
         below = QPoint(target.center().x() - size.width() // 2, target.bottom() + 16)
         above = QPoint(target.center().x() - size.width() // 2, target.top() - size.height() - 16)
-        beside = QPoint(target.left() - size.width() - 16, target.center().y() - size.height() // 2)
-        for spot in (below, above, beside):
-            box = QRect(spot, size)
-            if self.rect().contains(box):
+        left = QPoint(target.left() - size.width() - 16, target.center().y() - size.height() // 2)
+        right = QPoint(target.right() + 16, target.center().y() - size.height() // 2)
+        spots = (below, above, right, left)
+        for spot in spots:
+            if self.rect().contains(QRect(spot, size)):
                 self.bubble.move(spot)
                 return
-        x = max(8, min(self.width() - size.width() - 8, below.x()))
-        y = max(8, min(self.height() - size.height() - 8, self.height() // 2 - size.height() // 2))
-        self.bubble.move(x, y)
+
+        # Nothing fits whole (a big card, a small window): pushed inside the window, the spot
+        # that covers the least of what it explains. It used to sit in the middle, on top of it.
+        def inside(spot):
+            return QPoint(max(8, min(self.width() - size.width() - 8, spot.x())),
+                          max(8, min(self.height() - size.height() - 8, spot.y())))
+
+        def covered(spot):
+            overlap = QRect(spot, size).intersected(target.adjusted(-8, -8, 8, 8))
+            return overlap.width() * overlap.height() if overlap.isValid() else 0
+
+        self.bubble.move(min((inside(spot) for spot in spots), key=covered))
 
     def paintEvent(self, event):
+        if self.target() != getattr(self, "placed_for", None):
+            # What it points at moved (another chart, a glide, a fold): the bubble follows, as the
+            # highlight already does. Found by the MCP sweep: it stayed on top of the new card.
+            self._place_bubble()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         hole = QRectF(self.target()).adjusted(-8, -8, 8, 8)
