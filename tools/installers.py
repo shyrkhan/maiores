@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Turn a finished build into an installer for this computer's system.
 
-    Linux:   maiores_1.4.0_amd64.deb   (made here in Python, so it builds on any Linux)
-    Windows: Maiores 1.4.0 setup.exe   (Inno Setup's compiler, iscc, must be installed)
-    Mac:     Maiores 1.4.0 (Apple chip).dmg / (Intel).dmg         (hdiutil, which every Mac has)
+    Linux:   maiores_1.4.1_amd64.deb   (made here in Python, so it builds on any Linux)
+    Windows: Maiores 1.4.1 setup.exe   (Inno Setup's compiler, iscc, must be installed)
+    Mac:     Maiores 1.4.1 (Apple chip).dmg / (Intel).dmg         (hdiutil, which every Mac has)
 
 Usage: installers.py [--dist DIR]. build.py calls this after building.
 """

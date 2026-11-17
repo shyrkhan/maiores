@@ -1,3 +1,18 @@
+## Maiores 1.4.1
+
+- **Small laptop screens**: every window now fits a 1366 x 768 screen. Editing a person
+  was taller than that, which put Save and Cancel below the edge of the screen; the form
+  now scrolls and the buttons always stay in sight.
+- **Help menu**: "Report a problem or idea" opens a short form on GitHub, and "Support
+  Maiores" shows how to support the program (also linked from About).
+- **Check dates** now warns about a birth or death after today (a mistyped 2090, say).
+- Fixed: the first-run tour's "Don't show again" button was cut short, and its bubble
+  could cover the card it was explaining; it now moves with the card.
+- Fixed: choosing the tree that is already open from Open recent said it was open in
+  another window.
+- Date fields show only the whole examples that fit ("1921, 14.5.1921, about 1921");
+  all of them appear when you point at the field.
+
 ## Maiores 1.4
 
 **Family Tree is now Maiores** — Latin for "the ancestors". Same program, new name and a
@@ -72,10 +87,10 @@ changes to that person until it is updated.
 
 | Computer | File |
 |---|---|
-| Windows 10 or 11 | `Maiores.1.4.0.setup.exe` |
-| Mac with an Apple chip (M1 and newer) | `Maiores.1.4.0.Apple.chip.dmg` |
-| Older Mac with an Intel chip | `Maiores.1.4.0.Intel.dmg` |
-| Ubuntu, Debian, Mint | `maiores_1.4.0_amd64.deb` |
+| Windows 10 or 11 | `Maiores.1.4.1.setup.exe` |
+| Mac with an Apple chip (M1 and newer) | `Maiores.1.4.1.Apple.chip.dmg` |
+| Older Mac with an Intel chip | `Maiores.1.4.1.Intel.dmg` |
+| Ubuntu, Debian, Mint | `maiores_1.4.1_amd64.deb` |
 
 The `.zip` and `.tar.gz` files are the same program without an installer. The installers
 are not signed yet: on Windows choose "More info" → "Run anyway"; on a Mac right-click the
