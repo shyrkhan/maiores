@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFrame,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSizePolicy,
     QSlider,
@@ -32,6 +34,7 @@ from model import (
 )
 from facts_dialogs import FactContext, FactDetails, NamesDialog
 from photos import STORED_H, STORED_W, default_crop
+from screen import fit_hint, fit_to_screen
 from strings import t
 import theme
 
@@ -83,11 +86,11 @@ class PersonDialog(QDialog):
         self.birth_surname = QLineEdit(data.get("birth_surname", ""))
         self.sex = _combo(SEX_OPTIONS, data.get("sex", ""))
         self.birth_date = QLineEdit(date_input_text(data.get("birth_date", "")))
-        self.birth_date.setPlaceholderText(t("date_hint"))
+        fit_hint(self.birth_date, t("date_hint"))
         self.birth_place = QLineEdit(data.get("birth_place", ""))
         self.status = _combo(LIVING_OPTIONS, data.get("living", "yes"))
         self.death_date = QLineEdit(date_input_text(data.get("death_date", "")))
-        self.death_date.setPlaceholderText(t("date_hint"))
+        fit_hint(self.death_date, t("date_hint"))
         self.death_place = QLineEdit(data.get("death_place", ""))
         self.birth_details = FactDetails(self.context, {"citations": data.get("birth_citations"),
                                                          "people": data.get("birth_people")}, t("fact_birth"))
@@ -204,10 +207,24 @@ class PersonDialog(QDialog):
             self.another_button.clicked.connect(self._save_and_again)
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setDefault(True)
 
+        # The form scrolls on a short screen, so Save and Cancel always stay in sight.
+        fields = QWidget()
+        fields.setLayout(form)
+        form.setContentsMargins(0, 0, 0, 0)
+        scroller = QScrollArea()
+        scroller.setObjectName("person_fields")
+        scroller.setWidget(fields)
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        bar = scroller.verticalScrollBar().sizeHint().width()
+        scroller.setMinimumWidth(fields.sizeHint().width() + bar)
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        layout.addWidget(scroller, 1)
         layout.addWidget(self.problem)
         layout.addWidget(self.buttons)
+        wanted = fields.sizeHint().height() + self.buttons.sizeHint().height() + 3 * layout.spacing() + 24
+        fit_to_screen(self, fields.sizeHint().width() + bar + 24, wanted)
 
         self.status.currentIndexChanged.connect(self._refresh)
         for field in (self.birth_date, self.death_date):
@@ -372,7 +389,7 @@ class FindDialog(QDialog):
         self.exclude = set(exclude)
         self.chosen = None
         self.setWindowTitle(title or t("find_title"))
-        self.resize(420, 480)
+        fit_to_screen(self, 420, 480)
         self.search = QLineEdit()
         self.search.setPlaceholderText(t("find_placeholder"))
         self.results = QListWidget()
@@ -714,7 +731,7 @@ class PlacesDialog(QDialog):
         from edits import copy_tree
         from places_dialog import PlaceEditor
         self.setWindowTitle(t("places_title"))
-        self.resize(980, 620)
+        fit_to_screen(self, 980, 620)
         self.tree, self.chosen = tree, None
         self.work = copy_tree(tree)
         self.operations = []
@@ -816,7 +833,7 @@ class TimelineDialog(QDialog):
     def __init__(self, parent, tree, rows, year_of):
         super().__init__(parent)
         self.setWindowTitle(t("timeline_title"))
-        self.resize(720, 560)
+        fit_to_screen(self, 720, 560)
         self.tree, self.chosen = tree, None
         def when(row):  # By the real date: "about 1921" belongs in 1921, not after all plain years.
             parsed = parse_date(row.date)

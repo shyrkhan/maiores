@@ -23,6 +23,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PYTHON = ROOT / ".venv" / "bin" / "python"
+if not PYTHON.exists():  # A checkout without the venv, such as GitHub's machines.
+    PYTHON = Path(sys.executable)
 STATE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "maiores-mcp"
 HOME = STATE / "home"
 PID_FILE = STATE / "hidden.pid"
@@ -129,7 +131,8 @@ def launch(args):
     if os.path.exists(HIDDEN_SOCKET):
         os.unlink(HIDDEN_SOCKET)
     log = open(LOG_FILE, "w")
-    capped = CAP if shutil.which("systemd-run") else ["nice", "-n", "19"]
+    # The CPU cap needs a user session, which GitHub's machines (CI=true) do not have.
+    capped = CAP if shutil.which("systemd-run") and not os.environ.get("CI") else ["nice", "-n", "19"]
     process = subprocess.Popen(capped + command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     PID_FILE.write_text(str(process.pid))
@@ -192,7 +195,8 @@ def run_checks(args):
              "fuzz": ["--fuzz"], "leaks": ["--leaks"], "sweep": ["--sweep"]}.get(kind)
     if flags is None:
         raise RuntimeError("kind is quick, full, seeds, steps, perf, fuzz, leaks or sweep")
-    capped = CAP if shutil.which("systemd-run") else ["nice", "-n", "19"]
+    # The CPU cap needs a user session, which GitHub's machines (CI=true) do not have.
+    capped = CAP if shutil.which("systemd-run") and not os.environ.get("CI") else ["nice", "-n", "19"]
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", FT_STILL="1")
     done = subprocess.run(capped + [str(PYTHON), "tools/check.py", *flags], cwd=ROOT, env=env,
                           capture_output=True, text=True, timeout=int(args.get("timeout") or 1800))

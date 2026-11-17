@@ -18,6 +18,7 @@ from model import (
     date_input_text, fold_text, new_id, normalize_date_input, person_events, person_names, stored_facts,
     tree_sources,
 )
+from screen import fit_hint, fit_to_screen
 from strings import t
 
 
@@ -341,7 +342,7 @@ class NameDialog(QDialog):
             self.kind.addItem(t(f"name_type_{kind}"), kind)
         self.kind.setCurrentIndex(max(0, self.kind.findData(item.get("type"))))
         self.date = QLineEdit(item.get("date", ""))
-        self.date.setPlaceholderText(t("date_hint"))
+        fit_hint(self.date, t("date_hint"))
         self.citations = clean_citations(item.get("citations"))
         self.cite = QPushButton()
         self.cite.clicked.connect(self.edit_citations)
@@ -456,7 +457,7 @@ class SourcesDialog(QDialog):
     def __init__(self, parent, tree):
         super().__init__(parent)
         self.setWindowTitle(t("sources_title"))
-        self.resize(640, 460)
+        fit_to_screen(self, 640, 460)
         self.sources = tree_sources(tree)
         self.uses = cited_sources(tree)
         self.merged, self.removed = {}, set()
@@ -567,7 +568,7 @@ class UnsourcedDialog(QDialog):
     def __init__(self, parent, tree):
         super().__init__(parent)
         self.setWindowTitle(t("unsourced_title"))
-        self.resize(560, 480)
+        fit_to_screen(self, 560, 480)
         self.chosen = None
         self.rows = unsourced_facts(tree)
         intro = QLabel(t("unsourced_intro", count=len(self.rows)))

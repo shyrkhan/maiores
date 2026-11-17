@@ -5,6 +5,7 @@
     python tools/check.py --quick    unit tests and one short explorer run
     python tools/check.py --seeds 10 --steps 400     a longer hunt
     python tools/check.py --fuzz 2000 --leaks         broken input and memory, too
+    python tools/check.py --looks --ui-sweep          how it looks in every language; the UI sweep
 
 Nothing appears on your screen: the tests that need a real display get a
 private virtual one (Xvfb), and the explorer only ever uses throwaway trees.
@@ -46,6 +47,10 @@ def main():
     parser.add_argument("--fuzz", type=int, metavar="ROUNDS", default=0,
                         help="also throw broken input at the readers and editing rules (devtools/fuzz.py)")
     parser.add_argument("--leaks", action="store_true", help="also look for memory never given back")
+    parser.add_argument("--looks", action="store_true",
+                        help="also look at every dialog in every language for cut-off text and the like")
+    parser.add_argument("--ui-sweep", action="store_true",
+                        help="also drive a hidden copy through every menu, chart and dialog (tools/mcp_sweep.py)")
     args = parser.parse_args()
     python = sys.executable
     unit = [python, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]
@@ -82,6 +87,10 @@ def main():
     if args.leaks:
         stages.append(("memory: every window and action, 60 rounds", [python, "-m", "devtools.leaks"],
                        {"QT_QPA_PLATFORM": "offscreen"}))
+    if args.looks:
+        stages.append(("looks: every dialog in 18 languages", [python, "-m", "devtools.looks"], {}))
+    if args.ui_sweep:
+        stages.append(("UI sweep: every menu, chart and dialog", [python, "tools/mcp_sweep.py"], {}))
     if args.perf:
         stages.append(("speed on 1,000 / 3,000 / 6,000 people", [python, "-m", "devtools.perf"],
                        {"QT_QPA_PLATFORM": "offscreen"}))

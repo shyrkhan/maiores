@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 import documents
 from model import DOCUMENT_KINDS, person_documents
 from photos import PhotoError, read_image
+from screen import fit_hint, fit_to_screen
 from strings import t
 import theme
 
@@ -92,7 +93,7 @@ class DocumentsDialog(QDialog):
         self.portraits = []  # (person id, stored file, face box): faces made into portraits.
         self.context = context
         self.setWindowTitle(t("documents_title", name=person.display_name))
-        self.resize(760, 520)
+        fit_to_screen(self, 760, 520)
 
         self.list = QListWidget()
         self.list.setIconSize(THUMB)
@@ -111,7 +112,7 @@ class DocumentsDialog(QDialog):
         for kind in DOCUMENT_KINDS:
             self.kind.addItem(t(f"doc_kind_{kind}"), kind)
         self.date = QLineEdit()
-        self.date.setPlaceholderText(t("date_hint"))
+        fit_hint(self.date, t("date_hint"))
         self.private = QCheckBox(t("documents_private"))
         self.private.setToolTip(t("documents_private_tip"))
         for signal in (self.title.textEdited, self.date.textEdited):

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from model import date_input_text, fold_text, person_names
+from screen import fit_to_screen
 from strings import t
 import theme
 
@@ -44,7 +45,7 @@ class DuplicatesDialog(QDialog):
         self.tree, self.candidates = tree, candidates
         self.answer = None
         self.setWindowTitle(t("duplicates_title"))
-        self.resize(940, 600)
+        fit_to_screen(self, 940, 600)
         intro = QLabel(t("duplicates_intro", count=len(candidates)))
         intro.setWordWrap(True)
         self.list = QListWidget()

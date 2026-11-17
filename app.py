@@ -133,6 +133,7 @@ from reports_dialog import PosterDialog, ReportDialog
 from research_dialogs import ResearchDialog, StoryDialog, TasksDialog
 from views_dialogs import GalleryDialog, LifelinesDialog, StatisticsDialog
 from webshare_dialog import LiveShareDialog, WebPageDialog
+from screen import fit_to_screen
 from strings import t
 from version import VERSION
 
@@ -269,7 +270,7 @@ class MainWindow(QMainWindow):
         self.tour = None
         self.trees_folder = default_trees_folder()  # Where the start page looks for trees.
 
-        self.resize(1280, 860)
+        fit_to_screen(self, 1280, 860)
         self.setWindowTitle(t("window_title"))
         self.view = TreeView(
             self._clicked, self._double_clicked, self._context_menu, self.run_action, self._arrow_key
@@ -647,7 +648,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout
         dialog = QDialog(self)
         dialog.setWindowTitle(t("menu_guide").replace("&", ""))
-        dialog.resize(720, 640)
+        fit_to_screen(dialog, 720, 640)
         browser = QTextBrowser()
         browser.setOpenExternalLinks(True)
         browser.setHtml(t("guide_html"))
@@ -1144,7 +1145,7 @@ class MainWindow(QMainWindow):
             licences = ""
         dialog = QDialog(self)
         dialog.setWindowTitle(t("menu_about").replace("&", ""))
-        dialog.resize(620, 560)
+        fit_to_screen(dialog, 620, 560)
         layout = QVBoxLayout(dialog)
         layout.addWidget(start_cards.BrandHeader(t("app_tagline"), height=76))
         about = QLabel(f"<p>{t('about_text', version=VERSION)}</p><p>{t('about_free')}</p>"
@@ -1703,7 +1704,7 @@ class MainWindow(QMainWindow):
         dialog = QPrintPreviewDialog(printer, self)
         dialog.setWindowTitle(t("print_preview_title"))
         dialog.paintRequested.connect(self._paint_pages)
-        dialog.resize(1100, 800)
+        fit_to_screen(dialog, 1100, 800)
         dialog.exec()
         dialog.deleteLater()
 

@@ -5,6 +5,9 @@ Collects errors, failed checks and a screenshot of every dialog.
 
     python tools/mcp_sweep.py [OUTPUT_FOLDER]     (default dev-output/mcp-sweep)
 
+Then the person dialog's own buttons, ten odd dates, new people with odd names, and
+undo and redo of everything. Exits 1 on anything but a note.
+
 Look through the screenshots afterwards: the checks cannot see a cut-off button.
 2026-11-17 it found: the export "Report or book" entry renamed by the Help menu's
 "Report a problem", Open recent on the open tree saying "open in another window",
@@ -79,7 +82,10 @@ def visit(label, do):
     try:
         do()
     except RuntimeError as e:
-        findings.append((label, "tool error", str(e)))
+        # A greyed-out entry (Add father for someone who has one) is right, not a bug.
+        # So is an entry gone because an earlier one changed the view (Highlight a line).
+        quiet = "is disabled now" in str(e) or "no entry" in str(e)
+        findings.append((label, "note" if quiet else "tool error", str(e)))
         return
     t("maiores_wait", ms=900)
     wins = t("maiores_windows")
@@ -164,14 +170,49 @@ for who in ["Ante", "Mara", "Ivana", "Katica", "Nikola"]:
             t("maiores_menu", path=entry)
         visit(f"context {who}/{entry}", go)
 
-# 4. Undo everything, redo everything.
+# 4. The person dialog's own buttons, odd dates, and new people with odd names.
+for target in ["text:Other names", "text:Sources", "text:People present", "name:event_add"]:
+    def sub(target=target):
+        t("maiores_select", who="Luka")
+        t("maiores_action", key="edit")
+        t("maiores_wait", ms=500)
+        t("maiores_click", target=target)
+    visit(f"edit Luka / {target}", sub)
+for date in ["31.2.1950", "2090", "abt 1900", "1950-1940", "bef 1800", "0", "  1955  ", "14.5.1921.", "1.1.10000", "x"]:
+    def born(date=date):
+        t("maiores_select", who="Tomo")
+        t("maiores_action", key="edit")
+        t("maiores_wait", ms=500)
+        t("maiores_set", target="class:QLineEdit#4", value=date)
+        t("maiores_close", accept=True)
+    visit(f"born {date!r}", born)
+for key, name in [("add_child", "Žarko-Ćiro"), ("add_partner", "O'Brien"), ("add_sibling", "  ")]:
+    def add(key=key, name=name):
+        t("maiores_select", who="Marko")
+        t("maiores_action", key=key)
+        t("maiores_wait", ms=500)
+        t("maiores_set", target="class:QLineEdit", value=name)
+        t("maiores_close", accept=True)
+    visit(f"{key} {name!r}", add)
+
+# 5. Undo everything, redo everything: the tree must come back exactly.
 state = t("maiores_state")
 for _ in range(state["undo"]):
     t("maiores_history", do="undo")
+undone = t("maiores_state")
 visit("after undo all", lambda: None)
+for _ in range(undone["redo"]):
+    t("maiores_history", do="redo")
+redone = t("maiores_state")
+visit("after redo all", lambda: None)
+if redone["people"] != state["people"]:
+    findings.append(("redo all", "redo lost people", f"{state['people']} before, {redone['people']} after"))
 
 (OUT / "findings.json").write_text(json.dumps(findings, ensure_ascii=False, indent=1))
 print("FINDINGS", len(findings))
 for f in findings:
     print(json.dumps(f, ensure_ascii=False)[:600])
 t("maiores_stop")
+# Notes (a tree reopened, a disabled entry) are expected; anything else is a bug.
+serious = [f for f in findings if f[1] not in ("note",)]
+sys.exit(1 if serious else 0)

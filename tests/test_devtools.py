@@ -8,7 +8,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtWidgets import QComboBox, QPushButton
+from PySide6.QtWidgets import QApplication, QComboBox, QPushButton
 
 from test_window import WindowCase
 from devtools import devmode
@@ -171,3 +171,113 @@ class DriveTests(WindowCase):
         names = {t["name"] for t in replies[1]["result"]["tools"]}
         self.assertTrue({"maiores_launch", "maiores_screenshot", "maiores_click", "maiores_menu"} <= names)
         self.assertTrue(replies[2]["result"]["isError"])  # Nothing hidden runs in this test.
+
+
+class LooksCheckerTests(WindowCase):
+    """devtools/looks.py must see what a person would: each problem built in on purpose."""
+
+    def looker(self, language="en"):
+        import types
+        import strings
+        en = strings.STRINGS["en"]
+        from devtools.looks import norm
+        english = {}
+        for key, value in en.items():
+            if isinstance(value, str) and len(norm(value)) > 2 and "{" not in value:
+                english.setdefault(norm(value), []).append(key)
+        here = strings.STRINGS[language]
+        return types.SimpleNamespace(window=self.window, language=language, keys=set(en), english=english,
+                                     here_values={norm(v) for v in here.values() if isinstance(v, str)})
+
+    def found(self, dialog, language="en"):
+        from devtools.looks import check
+        dialog.show()
+        QApplication.processEvents()
+        problems = check(dialog, self.looker(language))
+        dialog.close()
+        return {(kind, text) for _, kind, text, _, _ in problems}
+
+    def test_cut_off_overlapping_too_big_and_wrong_text_are_seen(self):
+        from PySide6.QtWidgets import QCheckBox, QDialog, QLabel, QLineEdit
+        from strings import STRINGS
+        dialog = QDialog(self.window)
+        dialog.setWindowTitle("Test")
+        dialog.resize(600, 400)
+        narrow = QPushButton("Don't show again", dialog)
+        narrow.setGeometry(10, 10, 60, 30)
+        check = QCheckBox("A long check box text here", dialog)
+        check.setGeometry(10, 50, 80, 24)
+        hint = QLineEdit(dialog)
+        hint.setPlaceholderText("1921, 14.5.1921, about 1921, before 1900, 1880-1885")
+        hint.setGeometry(10, 90, 120, 26)
+        first = QLabel("Over", dialog)
+        first.setGeometry(200, 10, 80, 30)
+        second = QPushButton("Under", dialog)
+        second.setGeometry(220, 15, 80, 30)
+        outside = QPushButton("Off the edge", dialog)
+        outside.setGeometry(560, 200, 100, 30)
+        leftover = QLabel("Born {year}", dialog)
+        leftover.setGeometry(10, 150, 200, 30)
+        english = QLabel(STRINGS["en"]["menu_report"], dialog)
+        english.setGeometry(10, 200, 300, 30)
+        field_a, field_b = QLineEdit(dialog), QLineEdit(dialog)
+        field_a.setGeometry(330, 250, 200, 26)
+        field_b.setGeometry(333, 290, 200, 26)  # Three pixels out of line.
+        tall, short = QPushButton("OK", dialog), QPushButton("Cancel", dialog)
+        tall.setGeometry(330, 340, 90, 40)
+        short.setGeometry(430, 345, 90, 30)
+        found = self.found(dialog, "hr")
+        kinds = {kind for kind, _ in found}
+        self.assertIn("almost lined up", kinds)
+        self.assertIn("uneven buttons", kinds)
+        self.assertIn(("text cut off", "Don't show again"), found)
+        self.assertIn(("text cut off", "A long check box text here"), found)
+        self.assertIn(("text cut off", "1921, 14.5.1921, about 1921, before 1900, 1880-1885"), found)
+        self.assertIn("on top of each other", kinds)
+        self.assertIn(("cut off by its box", "Off the edge"), found)
+        self.assertIn("unfilled placeholder", kinds)
+        self.assertIn("English text", kinds)
+        dialog.resize(900, 900)
+        self.assertIn("window too big", {kind for kind, _ in self.found(dialog)})
+
+    def test_a_tidy_dialog_has_nothing_to_report(self):
+        from PySide6.QtWidgets import QDialog, QFormLayout, QLineEdit
+        dialog = QDialog(self.window)
+        dialog.setWindowTitle("Tidy")
+        form = QFormLayout(dialog)
+        form.addRow("Name", QLineEdit())
+        form.addRow("Place", QLineEdit())
+        form.addRow(QPushButton("Save"))
+        dialog.resize(400, 200)
+        self.assertEqual(set(), self.found(dialog))
+
+    def test_date_hints_keep_whole_examples(self):
+        from PySide6.QtWidgets import QLineEdit
+        from screen import fit_hint
+        edit = QLineEdit()
+        text = "1921, 14.5.1921, about 1921, before 1900, 1880-1885"
+        fit_hint(edit, text)
+        edit.show()
+        edit.resize(160, 26)
+        QApplication.processEvents()
+        shown = edit.placeholderText()
+        self.assertTrue(text.startswith(shown) and shown.split(", ")[-1] in text.split(", "), shown)
+        self.assertLess(len(shown), len(text))
+        self.assertEqual(text, edit.toolTip())
+        edit.resize(900, 26)
+        QApplication.processEvents()
+        self.assertEqual(text, edit.placeholderText())
+        edit.close()
+
+    def test_the_person_dialog_fits_a_small_screen_with_save_in_sight(self):
+        from dialogs import PersonDialog
+        from screen import room
+        relationships = [("F1", "Mara", "married", {"date": "", "place": ""})]
+        dialog = PersonDialog(self.window, "Edit", {"given": "Luka"}, link="birth", relationships=relationships)
+        dialog.show()
+        QApplication.processEvents()
+        most_w, most_h = room(dialog)  # The test screen is 800 x 600.
+        self.assertLessEqual(dialog.height(), most_h)
+        save = dialog.buttons.geometry()
+        self.assertTrue(dialog.rect().contains(save), "Save and Cancel must stay inside the window")
+        dialog.close()

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 import combine
 from canvas import clear_layout
 from model import fold_text
+from screen import fit_to_screen
 from strings import t
 
 NEW = ""  # The combo box value for "add as a new person".
@@ -28,7 +29,7 @@ class CombineDialog(QDialog):
         initial = initial or {}
         self.take_theirs = {k: set(v) for k, v in initial.get("take_theirs", {}).items()}
         self.setWindowTitle(t("combine_title", name=source_name))
-        self.resize(900, 640)
+        fit_to_screen(self, 900, 640)
 
         intro = QLabel(t("combine_intro"))
         intro.setWordWrap(True)

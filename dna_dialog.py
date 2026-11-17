@@ -22,6 +22,7 @@ import dna
 import kinship
 import strings
 import theme
+from screen import fit_to_screen
 from strings import t
 
 RAW_DIR = "dna"  # Raw files live in the tree's folder; shared copies never take them.
@@ -250,7 +251,7 @@ class DnaDialog(QDialog):
         self.others = {}  # Other people's tests changed here (compared with), by person id.
         self.new_raw_files = []  # Written now; removed again if the window is cancelled.
         self.setWindowTitle(t("dna_title", name=tree.people[person_id].display_name))
-        self.resize(1080, 720)
+        fit_to_screen(self, 1080, 720)
 
         self.test_box = QComboBox()
         self.test_box.currentIndexChanged.connect(self._show_test)

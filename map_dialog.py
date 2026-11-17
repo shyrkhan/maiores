@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 import edits
 from map_view import USER_AGENT, MapView
 from model import all_facts, date_input_text, fold_text, parse_date, place_coordinates, place_records
+from screen import fit_to_screen
 from strings import t
 
 DEFAULT_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
@@ -102,7 +103,7 @@ class MapDialog(QDialog):
     def __init__(self, parent, tree, focus=None, source_factory=None, search_factory=None, offline_reason=""):
         super().__init__(parent)
         self.setWindowTitle(t("map_window_title"))
-        self.resize(1180, 760)
+        fit_to_screen(self, 1180, 760)
         self.tree, self.focus, self.chosen = tree, focus, None
         self.work = edits.copy_tree(tree)
         self.operations, self.search, self.hits = [], None, []

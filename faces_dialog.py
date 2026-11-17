@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from photos import STORED_H, STORED_W
+from screen import fit_to_screen
 from strings import t
 import theme
 
@@ -107,7 +108,7 @@ class FacesDialog(QDialog):
         self.faces = [dict(face) for face in faces]
         self.portraits = []
         self.setWindowTitle(t("faces_title"))
-        self.resize(980, 640)
+        fit_to_screen(self, 980, 640)
         self.canvas = FaceCanvas(image)
         self.canvas.drawn.connect(self.add_face)
         self.canvas.picked.connect(lambda number: self.list.setCurrentRow(number))

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 import theme
 from model import fold_text, parse_date, person_documents
+from screen import fit_to_screen
 from strings import t
 
 # History shown behind the lifelines: (first year, last year, text key). Wars and the
@@ -171,7 +172,7 @@ class LifelinesDialog(QDialog):
     def __init__(self, parent, tree, selected, today=None):
         super().__init__(parent)
         self.setWindowTitle(t("lifelines_title"))
-        self.resize(1100, 720)
+        fit_to_screen(self, 1100, 720)
         self.tree, self.selected, self.today = tree, selected, today or datetime.date.today()
         self.chosen = None
         self.who = QComboBox()
@@ -216,7 +217,7 @@ class GalleryDialog(QDialog):
     def __init__(self, parent, tree, picture_for, documents_too=True):
         super().__init__(parent)
         self.setWindowTitle(t("gallery_title"))
-        self.resize(960, 700)
+        fit_to_screen(self, 960, 700)
         self.tree, self.picture_for, self.chosen = tree, picture_for, None
         self.with_documents = QCheckBox(t("gallery_documents"))
         self.with_documents.setChecked(documents_too)
@@ -335,7 +336,7 @@ class StatisticsDialog(QDialog):
     def __init__(self, parent, tree, today=None, summary=""):
         super().__init__(parent)
         self.setWindowTitle(t("statistics_title"))
-        self.resize(720, 640)
+        fit_to_screen(self, 720, 640)
         numbers = statistics(tree, today)
         tabs = QTabWidget()
         overview = QLabel(summary)

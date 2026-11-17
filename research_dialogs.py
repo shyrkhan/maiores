@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from model import fold_text, person_story, person_tasks
+from screen import fit_to_screen
 from strings import t
 
 
@@ -89,7 +90,7 @@ class StoryDialog(QDialog):
     def __init__(self, parent, person):
         super().__init__(parent)
         self.setWindowTitle(t("story_title", name=person.display_name))
-        self.resize(640, 520)
+        fit_to_screen(self, 640, 520)
         hint = QLabel(t("story_hint"))
         hint.setWordWrap(True)
         self.text = QPlainTextEdit(person_story(person))
@@ -112,7 +113,7 @@ class ResearchDialog(QDialog):
     def __init__(self, parent, tree):
         super().__init__(parent)
         self.setWindowTitle(t("research_title"))
-        self.resize(620, 520)
+        fit_to_screen(self, 620, 520)
         self.tree, self.chosen = tree, None
         self.rows = []
         for person in sorted(tree.people.values(), key=lambda p: (fold_text(p.surname), fold_text(p.given))):

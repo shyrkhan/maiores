@@ -100,6 +100,7 @@ class WindowCase(unittest.TestCase):
     def make_window(self):
         window = MainWindow(self.settings, today=TODAY)
         window.trees_folder = self.temp / "Family Trees"  # Never the real Documents folder.
+        window.resize(1280, 860)  # The size these tests were written for; the test screen is smaller.
         window.show()
         QTest.qWaitForWindowExposed(window)
         self.addCleanup(window.close)
