@@ -12,7 +12,7 @@ Look through the screenshots afterwards: the checks cannot see a cut-off button.
 2026-11-17 it found: the export "Report or book" entry renamed by the Help menu's
 "Report a problem", Open recent on the open tree saying "open in another window",
 the tour's cut-off "Don't show again" and its bubble covering the card."""
-import base64, json, subprocess, sys
+import base64, json, re, subprocess, sys
 from pathlib import Path
 
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "dev-output" / "mcp-sweep"
@@ -47,7 +47,8 @@ def t(name, **a):
 
 def shot(label):
     data = t("maiores_screenshot")
-    path = OUT / (label.replace("/", "_").replace(" ", "_").replace(".", "") + ".png")
+    # Letters, digits, - and _ only: GitHub refuses : " < > | * ? in uploaded file names.
+    path = OUT / (re.sub(r"[^\w-]+", "_", label).strip("_") + ".png")
     path.write_bytes(base64.b64decode(data))
     return path
 
