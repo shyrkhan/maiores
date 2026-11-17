@@ -9,7 +9,7 @@ Look through the screenshots afterwards: the checks cannot see a cut-off button.
 2026-11-17 it found: the export "Report or book" entry renamed by the Help menu's
 "Report a problem", Open recent on the open tree saying "open in another window",
 the tour's cut-off "Don't show again" and its bubble covering the card."""
-import base64, json, subprocess, sys, time
+import base64, json, subprocess, sys
 from pathlib import Path
 
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "dev-output" / "mcp-sweep"
@@ -85,7 +85,7 @@ def visit(label, do):
     wins = t("maiores_windows")
     if len(wins) > 1:
         front = wins[-1]
-        path = shot(label)
+        shot(label)
         if front["class"] == "QMessageBox":
             box = t("maiores_widgets", depth=3, limit=30)
             if "nexpected" in box or "rror" in box:

@@ -50,7 +50,7 @@ def main():
     python = sys.executable
     unit = [python, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]
     code = [str(p) for pattern in ("*.py", "devtools/*.py", "tools/*.py", "tests/*.py")
-            for p in sorted(ROOT.glob(pattern))]
+            for p in sorted(ROOT.glob(pattern))] + [str(ROOT / "tools" / "maiores-mcp")]
     stages = [
         ("code check (pyflakes)", [python, "-m", "pyflakes", *code], {}),
         ("unit tests, no display", unit, {"QT_QPA_PLATFORM": "offscreen", "FT_STILL": "1"}),
