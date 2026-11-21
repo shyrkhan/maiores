@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail} is vastgelegd als eigen voorouder",
     "issue.unsafe_photo": "{detail} heeft een foto buiten de map media",
     "issue.view_unreadable": "de opgeslagen weergave kon niet worden gelezen, dus de standaardweergave wordt gebruikt",
+    "combine_incomplete": "Er is niets samengevoegd: het resultaat zou verwijzen naar gegevens of bestanden die ontbreken ({what}). Uw stamboom is ongewijzigd.",
+    "restore_not_saved": "De reservekopie kon niet worden opgeslagen en is dus niet teruggezet: {error}",
+    "recover_offer": "Deze stamboom kan niet worden geopend: {error}\n\nDe nieuwste leesbare reservekopie is van {when} ({people} personen). Die gebruiken? Het beschadigde bestand blijft ernaast bewaard; foto's en documenten blijven zoals ze zijn.",
+    "import_documents_failed": "Documenten die niet konden worden gekopieerd: {count}.",
+    "export_media_not_ours": "{path} bestaat al en bevat andere dingen, dus de foto's kunnen daar niet worden geplaatst. Sla het bestand op onder een andere naam of in een andere map.",
+    "dna_compare_builds": "Deze ruwe bestanden kunnen niet worden vergeleken: ze gebruiken verschillende referentiebuilds ({mine} en {theirs}), en alleen posities van build 37 kunnen in cM worden gemeten.",
 }

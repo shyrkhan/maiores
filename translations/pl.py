@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail}: zapisano jako własnego przodka",
     "issue.unsafe_photo": "{detail} ma zdjęcie poza folderem media",
     "issue.view_unreadable": "nie udało się odczytać zapisanego widoku, więc użyto domyślnego",
+    "combine_incomplete": "Nic nie zostało połączone: wynik odwoływałby się do brakujących wpisów lub plików ({what}). Twoje drzewo pozostało bez zmian.",
+    "restore_not_saved": "Nie udało się zapisać kopii, więc jej nie przywrócono: {error}",
+    "recover_offer": "Nie można otworzyć tego drzewa: {error}\n\nNajnowsza czytelna kopia pochodzi z {when} ({people} osób). Użyć jej? Uszkodzony plik zostanie zachowany obok, a zdjęcia i dokumenty pozostaną bez zmian.",
+    "import_documents_failed": "Dokumenty, których nie udało się skopiować: {count}.",
+    "export_media_not_ours": "{path} już istnieje i zawiera inne rzeczy, więc nie można tam umieścić zdjęć. Zapisz plik pod inną nazwą lub w innym folderze.",
+    "dna_compare_builds": "Tych surowych plików nie można porównać: używają różnych wersji referencyjnych ({mine} i {theirs}), a w cM można mierzyć tylko pozycje wersji 37.",
 }

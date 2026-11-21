@@ -973,4 +973,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail} je upisan/a kao vlastiti predak",
     "issue.unsafe_photo": "{detail} ima fotografiju izvan mape media",
     "issue.view_unreadable": "spremljeni prikaz nije pročitan pa se koristi zadani",
+    "combine_incomplete": "Ništa nije spojeno: rezultat bi upućivao na zapise ili datoteke kojih nema ({what}). Vaše stablo je nepromijenjeno.",
+    "restore_not_saved": "Kopija se nije mogla spremiti, pa nije vraćena: {error}",
+    "recover_offer": "Ovo se stablo ne može otvoriti: {error}\n\nNajnovija čitljiva kopija je od {when} ({people} osoba). Koristiti nju? Oštećena datoteka ostaje pokraj nje, a fotografije i dokumenti ostaju kakvi jesu.",
+    "import_documents_failed": "Dokumenata koji se nisu mogli kopirati: {count}.",
+    "export_media_not_ours": "{path} već postoji i sadrži druge stvari, pa se fotografije ne mogu staviti onamo. Spremite datoteku pod drugim imenom ili u drugu mapu.",
+    "dna_compare_builds": "Ove sirove datoteke ne mogu se usporediti: koriste različite referentne verzije ({mine} i {theirs}), a u cM se mogu mjeriti samo položaji verzije 37.",
 }

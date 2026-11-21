@@ -68,6 +68,10 @@ class TreeLoadError(Exception):
     """The tree could not be opened. The files on disk have not been touched."""
 
 
+class NewerTreeError(TreeLoadError):
+    """Saved by a newer Maiores. Not damaged: an older backup must not be offered over it."""
+
+
 @dataclass
 class OpenedTree:
     tree: Tree
@@ -202,7 +206,7 @@ def _check_version(data, name):
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
         raise TreeLoadError(t("error_format", name=name, detail="bad format_version"))
     if version > FORMAT_VERSION:
-        raise TreeLoadError(t("error_newer", name=name, version=version))
+        raise NewerTreeError(t("error_newer", name=name, version=version))
     return version
 
 
@@ -261,6 +265,23 @@ def open_tree(folder):
     if house not in tree.people:
         house = None
     return OpenedTree(tree, house, validate(tree) + view_issues, read_view_mode(folder))
+
+
+def recover_from_backup(folder, backup):
+    """Put a backup's tree.json in place of a damaged one. The damaged file is kept beside
+    it (never deleted), and photos, documents and the other backups are left alone."""
+    folder = Path(folder)
+    tree_file = folder / TREE_FILE
+    text = (Path(backup) / TREE_FILE).read_text(encoding="utf-8")
+    if tree_file.exists():
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        kept = folder / f"tree-damaged-{stamp}.json"
+        number = 1
+        while kept.exists():
+            number += 1
+            kept = folder / f"tree-damaged-{stamp}-{number}.json"
+        shutil.copy2(tree_file, kept)
+    atomic_write(tree_file, text)
 
 
 def read_tree(folder):

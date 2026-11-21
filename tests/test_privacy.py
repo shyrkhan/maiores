@@ -177,8 +177,49 @@ class DocumentTests(unittest.TestCase):
         result = read_gedcom(out / "family.ged", TODAY)
         person_id = next(iter(result.tree.people))
         self.assertNotIn(person_id, result.photos)  # A document never becomes the portrait.
-        [(path, title)] = result.documents[person_id]
-        self.assertEqual((path.read_bytes(), title), (b"will", "The will"))
+        [(path, title, kind, date)] = result.documents[person_id]
+        self.assertEqual((path.read_bytes(), title, kind, date), (b"will", "The will", "", ""))
+
+    def test_a_documents_date_and_kind_survive_gedcom(self):
+        stored = documents.store_document(self.file("letter.pdf", b"letter"), self.tree_folder)
+        tree = Tree({"a": Person("a", given="Ante", living="no", death={"date": "", "place": ""},
+                                 extra={"documents": [{"file": stored, "title": "Letter", "kind": "letter",
+                                                       "date": "1910-03-15"}]})}, {})
+        out = self.root / "out"
+        out.mkdir()
+        from exports import export_gedcom
+        export_gedcom(tree, self.tree_folder, out / "family.ged")
+        result = read_gedcom(out / "family.ged", TODAY)
+        [(_path, title, kind, date)] = next(iter(result.documents.values()))
+        self.assertEqual((title, kind, date), ("Letter", "letter", "1910-03-15"))
+
+    def test_a_new_export_leaves_no_old_media_behind(self):
+        secret = documents.store_document(self.file("secret.pdf", b"secret"), self.tree_folder)
+        public = documents.store_document(self.file("public.pdf", b"public"), self.tree_folder)
+        tree = Tree({"a": Person("a", given="Ante", living="no", death={"date": "", "place": ""},
+                                 extra={"documents": [{"file": secret, "title": "S"}, {"file": public, "title": "P"}]})}, {})
+        out = self.root / "out"
+        out.mkdir()
+        from exports import export_gedcom
+        export_gedcom(tree, self.tree_folder, out / "family.ged")
+        self.assertEqual(len([f for f in (out / "family_media").iterdir() if f.suffix == ".pdf"]), 2)
+        tree.people["a"].extra["documents"][0]["private"] = True
+        export_gedcom(privacy.shareable(tree, TODAY), self.tree_folder, out / "family.ged")
+        left = sorted(f.read_bytes() for f in (out / "family_media").iterdir() if f.suffix == ".pdf")
+        self.assertEqual(left, [b"public"])
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["family.ged", "family_media"])
+
+    def test_an_export_never_deletes_a_folder_it_did_not_make(self):
+        stored = documents.store_document(self.file("will.pdf", b"will"), self.tree_folder)
+        tree = Tree({"a": Person("a", given="Ante", living="no", death={"date": "", "place": ""},
+                                 extra={"documents": [{"file": stored, "title": "W"}]})}, {})
+        out = self.root / "out"
+        (out / "family_media" / "mine").mkdir(parents=True)
+        (out / "family_media" / "mine" / "keep.txt").write_text("mine")
+        from exports import ExportError, export_gedcom
+        with self.assertRaises(ExportError):
+            export_gedcom(tree, self.tree_folder, out / "family.ged")
+        self.assertTrue((out / "family_media" / "mine" / "keep.txt").exists())
 
 
 if __name__ == "__main__":

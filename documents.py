@@ -11,7 +11,7 @@ import os
 import shutil
 from pathlib import Path
 
-from model import photo_is_safe
+from model import inside_media, photo_is_safe
 
 MEDIA_DIR = "media"
 DOCS_DIR = "docs"
@@ -43,8 +43,9 @@ def _content_name(source, suffix):
     return f"{digest.hexdigest()[:24]}{suffix}"
 
 
-def store_document(source, folder):
-    """Copy a file into the tree and return its stored path (media/docs/...)."""
+def store_document(source, folder, created=None):
+    """Copy a file into the tree and return its stored path (media/docs/...). A path that
+    is new in the tree is also added to `created`, so a cancelled window can take it back."""
     source = Path(source)
     suffix = source.suffix.lower()
     if suffix not in ALLOWED_TYPES:
@@ -61,6 +62,8 @@ def store_document(source, folder):
         temp = docs / f".{name}.tmp"
         shutil.copyfile(source, temp)
         os.replace(temp, target)
+        if created is not None:
+            created.append(f"{MEDIA_DIR}/{DOCS_DIR}/{name}")
     return f"{MEDIA_DIR}/{DOCS_DIR}/{name}"
 
 
@@ -69,11 +72,8 @@ def resolve_document(folder, stored):
     Trees come from other people, so the path must stay inside the media folder."""
     if not folder or not stored or not photo_is_safe(stored) or not is_allowed(stored):
         return None
-    media = (Path(folder) / MEDIA_DIR).resolve()
-    path = (Path(folder) / stored).resolve()
-    if not path.is_relative_to(media) or not path.is_file():
-        return None
-    return path
+    path = inside_media(folder, stored)
+    return path if path is not None and path.is_file() else None
 
 
 def copy_from_tree(their_folder, stored, my_folder):

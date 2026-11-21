@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from model import (
-    Family, Person, Tree, as_list, fact_details, family_marriage, new_id, parse_date, person_documents, person_events,
+    DOCUMENT_KINDS, Family, Person, Tree, as_list, fact_details, family_marriage, new_id, parse_date, person_documents, person_events,
     person_names, person_story, place_records, stored_facts, tree_sources,
 )
 
@@ -425,6 +425,8 @@ def write_gedcom(tree, path, photo_path=None, today=None):
             lines.append(f"1 _FT_LIVING {person.living}")
         if person.extra.get("hidden"):
             lines.append("1 _FT_HIDDEN Y")  # Left out of a shared copy; see privacy.py.
+        if person.extra.get("private"):
+            lines.append("1 RESN confidential")  # The standard mark other programs respect too.
         if person.photo and photo_path is not None:
             recorded = photo_path(person.photo)
             if recorded:
@@ -440,6 +442,10 @@ def write_gedcom(tree, path, photo_path=None, today=None):
                 if document["title"]:
                     lines.append(f"2 TITL {_safe_value(document['title'])}")
                 lines.append("2 _FT_DOC Y")  # A document, not the portrait, when read back.
+                if document["kind"] != "other":
+                    lines.append(f"2 _FT_DOC_KIND {document['kind']}")
+                if document["date"]:
+                    lines.append(f"2 _FT_DOC_DATE {_safe_value(document['date'])}")
         for fid, family in own_families.get(pid, ()):
             for child in family.children:
                 if child["person"] == pid:
@@ -620,7 +626,7 @@ class ImportResult:
     tree: Tree
     photos: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
-    documents: dict = field(default_factory=dict)  # person id: [(file path, title)]
+    documents: dict = field(default_factory=dict)  # person id: [(file path, title, kind or "", date)]
 
 
 def decode_gedcom(data):
@@ -1103,7 +1109,7 @@ def _media_references(record, base_folder, shared_objects):
     """Files the record points to, only those inside the GEDCOM's own folder: the first
     picture is the portrait, the rest are documents.
 
-    Returns (photo path or None, [(document path, title)], whether any file was mentioned).
+    Returns (photo path or None, [(document path, title, kind, date)], whether any file was mentioned).
     """
     mentioned, photo, documents = False, None, []
     for node in record.all("OBJE"):
@@ -1121,7 +1127,9 @@ def _media_references(record, base_folder, shared_objects):
             if photo is None and resolved.suffix.lower() in PICTURE_TYPES and not source.text_of("_FT_DOC"):
                 photo = resolved
             else:
-                documents.append((resolved, title or file_node.text_of("TITL")))
+                kind = source.text_of("_FT_DOC_KIND")
+                documents.append((resolved, title or file_node.text_of("TITL"),
+                                  kind if kind in DOCUMENT_KINDS else "", source.text_of("_FT_DOC_DATE")))
         if (photo, len(documents)) == found_before:
             node.used = False  # Nothing copied in (a web link, a missing file): keep the line.
             if source is not node:
@@ -1293,6 +1301,13 @@ def read_gedcom(path, today=None):
             person.extra["story"] = story.full_text().strip()
         if record.text_of("_FT_HIDDEN"):
             person.extra["hidden"] = True
+        restriction = record.first("RESN")
+        if restriction is not None:  # Another program's "confidential" or "privacy" is our private mark.
+            words = {w.strip().lower() for w in restriction.value.split(",")}
+            if words & {"confidential", "privacy"}:
+                person.extra["private"] = True
+            if words - {"confidential", "privacy"}:
+                restriction.used = False  # "locked" and the like: kept as written.
         main_name = next((n for n in record.children if n.tag == "NAME" and not n.peek("_FT_TYPE")), None)
         if main_name is not None:
             ours = f"{given} /{birth_surname or surname}/".strip()

@@ -87,6 +87,7 @@ class DocumentsDialog(QDialog):
         super().__init__(parent)
         self.folder, self.start_folder = folder, start_folder or Path.home()
         self.items = [dict(d) for d in person_documents(person)]
+        self.created = []  # Files this window copied into the tree that weren't there before.
         self.portrait_from = None  # A picture chosen to cut the portrait from.
         self.faces = {path: [dict(f) for f in items] for path, items in (faces or {}).items()}
         self.face_changes = {}  # Stored file -> its faces as now marked.
@@ -212,6 +213,21 @@ class DocumentsDialog(QDialog):
             label += f"\n{t('documents_private_mark')}"
         self.list.item(row).setText(label)
 
+    def done(self, result):
+        """Files copied in by this window and not kept (cancelled, or removed again before
+        OK) are deleted: nothing else can refer to them, since they weren't in the tree before."""
+        kept = {item["file"] for item in self.items} if result else set()
+        for stored in self.created:
+            if stored not in kept:
+                path = documents.resolve_document(self.folder, stored)
+                if path is not None:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+        self.created = []
+        super().done(result)
+
     def ask_files(self):
         paths, _ = QFileDialog.getOpenFileNames(self, t("documents_add"), str(self.start_folder), file_filter())
         return paths
@@ -221,7 +237,7 @@ class DocumentsDialog(QDialog):
         refused = []
         for path in paths if paths is not None else self.ask_files():
             try:
-                stored = documents.store_document(path, self.folder)
+                stored = documents.store_document(path, self.folder, self.created)
             except (documents.DocumentError, OSError):
                 refused.append(Path(path).name)
                 continue

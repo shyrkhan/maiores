@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail}: zapsáno jako vlastní předek",
     "issue.unsafe_photo": "{detail} má fotografii mimo složku media",
     "issue.view_unreadable": "uložené zobrazení nešlo přečíst, proto se použije výchozí",
+    "combine_incomplete": "Nic nebylo spojeno: výsledek by odkazoval na záznamy nebo soubory, které chybí ({what}). Váš rodokmen se nezměnil.",
+    "restore_not_saved": "Zálohu se nepodařilo uložit, proto nebyla obnovena: {error}",
+    "recover_offer": "Tento rodokmen nelze otevřít: {error}\n\nNejnovější čitelná záloha je z {when} ({people} osob). Použít ji? Poškozený soubor zůstane vedle ní a fotografie i dokumenty zůstanou beze změny.",
+    "import_documents_failed": "Dokumenty, které se nepodařilo zkopírovat: {count}.",
+    "export_media_not_ours": "{path} už existuje a obsahuje jiné věci, proto tam nelze uložit fotografie. Uložte soubor pod jiným názvem nebo do jiné složky.",
+    "dna_compare_builds": "Tyto surové soubory nelze porovnat: používají různé referenční verze ({mine} a {theirs}) a v cM lze měřit jen pozice verze 37.",
 }

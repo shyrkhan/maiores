@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail} 被記錄為自己的祖先",
     "issue.unsafe_photo": "{detail} 的相片位於媒體資料夾之外",
     "issue.view_unreadable": "無法讀取儲存的檢視，因此使用預設值",
+    "combine_incomplete": "未合併任何內容：結果將引用不存在的記錄或檔案（{what}）。您的族譜未改變。",
+    "restore_not_saved": "備份無法儲存，因此未還原：{error}",
+    "recover_offer": "無法開啟此族譜：{error}\n\n最新的可讀備份來自 {when}（{people} 人）。要使用它嗎？損壞的檔案會保留在旁邊，照片和文件保持不變。",
+    "import_documents_failed": "無法複製的文件：{count}。",
+    "export_media_not_ours": "{path} 已存在且包含其他內容，因此無法放入照片。請用其他名稱或在其他資料夾中儲存。",
+    "dna_compare_builds": "無法比較這些原始檔案：它們使用不同的參考版本（{mine} 和 {theirs}），只有版本 37 的位置可以用 cM 測量。",
 }

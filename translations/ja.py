@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail} が自分自身の祖先として記録されています",
     "issue.unsafe_photo": "{detail} の写真がメディアフォルダー外にあります",
     "issue.view_unreadable": "保存された表示を読み取れなかったため、既定の表示を使用します",
+    "combine_incomplete": "統合は行われませんでした。結果が存在しない記録やファイルを参照することになります ({what})。家系図は変更されていません。",
+    "restore_not_saved": "バックアップを保存できなかったため、復元されていません: {error}",
+    "recover_offer": "この家系図を開けません: {error}\n\n読み取り可能な最新のバックアップは {when} のものです ({people} 人)。これを使いますか? 破損したファイルは横に残され、写真と書類はそのままです。",
+    "import_documents_failed": "コピーできなかった書類: {count}。",
+    "export_media_not_ours": "{path} は既に存在し、別のものが入っているため、写真を置けません。別の名前または別のフォルダーに保存してください。",
+    "dna_compare_builds": "これらの生データは比較できません。参照ビルドが異なり ({mine} と {theirs})、cM で測定できるのはビルド 37 の位置だけです。",
 }

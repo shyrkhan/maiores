@@ -56,6 +56,23 @@ def run_pyinstaller(output, work):
     subprocess.run(command + [str(ROOT / "app.py")], check=True, cwd=ROOT)
 
 
+# Linux libraries taken from the computer the program runs on, never packed: libxkbcommon
+# and libxkbcommon-x11 must be one version, and the x11 half always came from the host
+# (Qt loads it through the xcb plugin), so a packed older libxkbcommon beside a newer host
+# libxkbcommon-x11 crashed on closing under X11. Every Linux desktop has both.
+HOST_LIBRARIES = ("libxkbcommon.so", "libxkbcommon-x11.so")
+
+
+def drop_host_libraries(output):
+    removed = []
+    if sys.platform.startswith("linux"):
+        for path in (output / NAME).rglob("*"):
+            if path.is_file() and path.name.startswith(HOST_LIBRARIES):
+                path.unlink()
+                removed.append(path.name)
+    return removed
+
+
 def pack(output):
     """A .app on Mac, otherwise a folder. Mac needs ditto to keep the bundle intact."""
     base = output / f"{NAME}-{VERSION}-{system_label()}"
@@ -88,6 +105,8 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
     run_pyinstaller(output, work)
+    for name in drop_host_libraries(output):
+        print(f"Left out {name}: the computer's own is used")
     archive = pack(output)
     print(f"Built {archive} ({archive.stat().st_size / 1_000_000:.0f} MB)")
     if not args.no_installer:

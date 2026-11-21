@@ -25,7 +25,7 @@ import theme
 from screen import fit_to_screen
 from strings import t
 
-RAW_DIR = "dna"  # Raw files live in the tree's folder; shared copies never take them.
+RAW_DIR = dna.RAW_DIR
 
 
 def relation_name(up, down, half=False):
@@ -633,8 +633,11 @@ class DnaDialog(QDialog):
 
     def compare_tests(self, other_id, other_test):
         test = self.current_test()
-        calls_mine, _ = dna.read_raw(self.raw_path(test))
-        calls_theirs, _ = dna.read_raw(self.raw_path(other_test))
+        calls_mine, info_mine = dna.read_raw(self.raw_path(test))
+        calls_theirs, info_theirs = dna.read_raw(self.raw_path(other_test))
+        if not dna.comparable(info_mine, info_theirs):
+            return self._report(t("dna_compare_builds", mine=info_mine.get("build") or "?",
+                                  theirs=info_theirs.get("build") or "?"))
         segments = dna.compare(calls_mine, calls_theirs)
         total, count, longest = dna.summary(segments)
         me = self.tree.people[self.person_id].display_name

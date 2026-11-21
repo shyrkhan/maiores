@@ -219,11 +219,12 @@ class Result:
     joined: int
 
 
-def combine(mine, theirs, matches, take_theirs=None, copy_photo=None, copy_documents=None):
+def combine(mine, theirs, matches, take_theirs=None, copy_photo=None, copy_documents=None, copy_raw=None):
     """Your tree with theirs added. `matches`: {their id: your id} for people who are the
     same; `take_theirs`: {their id: {field keys}} where their version wins; `copy_photo(their
     id, their stored path)` gives a photo path in your tree's media folder, or "";
-    `copy_documents(their id, their documents)` gives the documents with files in yours.
+    `copy_documents(their id, their documents)` gives the documents with files in yours;
+    `copy_raw(their stored path)` copies a DNA raw data file into yours, giving its path or "".
     Without them, no file of theirs is referred to from your tree. Raises
     CombineError naming the pair if a match would make the tree contradict itself."""
     take_theirs = take_theirs or {}
@@ -240,6 +241,7 @@ def combine(mine, theirs, matches, take_theirs=None, copy_photo=None, copy_docum
         copy.extra.pop("documents", None)
         if documents:
             copy.extra["documents"] = documents
+        _bring_raw_files(copy, copy_raw)
         trial.people[copy.id] = copy
     for family in theirs.families.values():
         partners = [new_ids[p] for p in family.partners if p in new_ids]
@@ -317,6 +319,35 @@ def _bring_places(theirs, trial):
         mine[name] = merged
     if mine:
         trial.extra["places"] = mine
+
+
+def _bring_raw_files(person, copy_raw):
+    """A DNA raw file is referred to only once it is in your tree's folder: a test whose
+    file couldn't be copied keeps its matches and segments, not a path to nowhere."""
+    dna = person.extra.get("dna")
+    if not isinstance(dna, dict) or not isinstance(dna.get("tests"), list):
+        return
+    for test in dna["tests"]:
+        raw = test.get("raw") if isinstance(test, dict) else None
+        if not isinstance(raw, dict):
+            continue
+        stored = (copy_raw(raw.get("file", "")) or "") if copy_raw else ""
+        if stored:
+            test["raw"] = {**raw, "file": stored}
+        else:
+            test.pop("raw")
+
+
+def missing_records(tree):
+    """What a combined tree refers to but doesn't hold: [source ids cited but missing].
+    Checked before a combined tree replaces yours, so success is never reported over a gap."""
+    sources = tree_sources(tree)
+    missing = []
+    for _owner, _kind, fact in stored_facts(tree):
+        for citation in clean_citations(fact.get("citations")):
+            if citation["source"] not in sources and citation["source"] not in missing:
+                missing.append(citation["source"])
+    return missing
 
 
 def _bring_faces_and_marks(trial, theirs):

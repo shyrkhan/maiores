@@ -9,7 +9,7 @@ import re
 import unicodedata
 import uuid
 from dataclasses import dataclass, field, replace
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from strings import t
 
@@ -722,6 +722,18 @@ def person_documents(person):
                           "kind": item.get("kind") if item.get("kind") in DOCUMENT_KINDS else "other",
                           "date": str(item.get("date") or ""), "private": bool(item.get("private"))})
     return found
+
+
+def inside_media(folder, stored, media_dir="media"):
+    """The resolved path of a stored file, or None when it leaves the tree. Checked against
+    the media folder and the tree folder itself: a media folder that is a link to somewhere
+    else must not let a tree reach files outside it."""
+    root = Path(folder).resolve()
+    media = (Path(folder) / media_dir).resolve()
+    path = (Path(folder) / stored).resolve()
+    if not media.is_relative_to(root) or not path.is_relative_to(media):
+        return None
+    return path
 
 
 def files_of(person):

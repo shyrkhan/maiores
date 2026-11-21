@@ -4,8 +4,8 @@ apply to copies made for other people: GEDCOM exports, map pins and shared trees
 - Items marked private (a document, someone's notes, a whole person) stay out.
 - Living people, if chosen, are reduced to their surname and sex. A person counts as
   living unless the tree says otherwise: when in doubt, hide. Someone with no death
-  recorded who was born less than LIVING_YEARS ago, or whose birth is unknown, is
-  treated as living.
+  recorded who could have been born less than LIVING_YEARS ago (the latest date a range
+  allows, to the day), or whose birth is unknown, is treated as living.
 - A hidden person is marked with the "hidden" flag (never with translated words), so
   when a shared copy comes back through combining, they are recognised as hidden.
 """
@@ -24,7 +24,17 @@ def counts_as_living(person, today):
     if person.living == "no" or person.death is not None:
         return False
     born = parse_date(person.birth_date)
-    return born is None or today.year - born.year < LIVING_YEARS
+    if born is None:
+        return True
+    # The latest the birth could be: the end of a range ("between 1920 and 1930"), and the
+    # day itself, so protection lasts until the 100th birthday, not the start of that year.
+    year = born.end_year or born.year
+    if born.end_year:
+        month, day = 12, 31
+    else:
+        month, day = born.month or 12, born.day or 31
+    age = today.year - year - ((today.month, today.day) < (month, day))
+    return age < LIVING_YEARS
 
 
 def is_hidden(person):
@@ -77,8 +87,10 @@ def shareable(tree, today, hide_living=True):
     faces = {}
     for path, items in face_links(shared).items():
         if path in shared_files:  # A face is only shared with its picture,
-            kept = [{k: v for k, v in item.items() if not (k == "person" and v in hidden)} for item in items]
-            faces[path] = kept  # and never names someone hidden.
+            # and never names someone hidden: neither the link nor a name typed on the face.
+            kept = [{k: v for k, v in item.items() if k not in ("person", "name")} if item.get("person") in hidden
+                    else item for item in items]
+            faces[path] = kept
     shared.extra.pop("faces", None)
     if faces:
         shared.extra["faces"] = faces

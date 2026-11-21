@@ -72,6 +72,13 @@ jobs:
             *) program="dist/maiores/maiores" ;;
           esac
           python tools/self_test.py "$program"
+          if [ "$RUNNER_OS" = Linux ]; then
+            # On a real X display too: closing under X11 once crashed (mixed libxkbcommon).
+            sudo apt-get install -y xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+              libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+            SELF_TEST_PLATFORM=xcb xvfb-run -a python tools/self_test.py "$program"
+            if ls dist/maiores/_internal/libxkbcommon* 2>/dev/null; then echo "::error::libxkbcommon was packed"; exit 1; fi
+          fi
           # The map needs HTTPS; a build without it falls back to a plain grid. Exit code 0 = has it.
           if "$program" --network-check; then echo "HTTPS for the map: yes"; else echo "::warning::HTTPS for the map: no ($?)"; fi
       - name: Install, start and uninstall the installer

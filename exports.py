@@ -21,29 +21,69 @@ class ExportError(Exception):
     pass
 
 
+MEDIA_MARK = ".maiores-export"  # Written into an export's media folder: this program made it.
+
+
+def _ours(media):
+    """Whether an existing media folder beside the file can be replaced: one this program
+    wrote (marked, or the flat folder of files older versions wrote). Anything else is the
+    person's own, and is never deleted."""
+    if not media.exists():
+        return True
+    if not media.is_dir() or media.is_symlink():
+        return False
+    return (media / MEDIA_MARK).is_file() or all(entry.is_file() and not entry.is_symlink() for entry in media.iterdir())
+
+
 def export_gedcom(tree, folder, path):
-    """Write a GEDCOM file, with its photos in a folder beside it."""
+    """Write a GEDCOM file, with its photos in a folder beside it. The folder is made fresh
+    each time and holds only what this file refers to: a picture someone has since hidden
+    or marked private must not stay behind in it, to be sent along with the file."""
     path = Path(path)
     media_name = f"{path.stem}_media"
+    media = path.parent / media_name
+    if not _ours(media):
+        raise ExportError(t("export_media_not_ours", path=media))
     copies = {}
+    names = set()
 
     def record_photo(stored):
         source = resolve_photo(folder, stored)
         if source is None:
             return None
-        copies[stored] = source
-        return f"{media_name}/{source.name}"
+        if stored not in copies:
+            name, number = source.name, 1
+            while name.lower() in names:  # Two files called the same in different folders.
+                number += 1
+                name = f"{source.stem}-{number}{source.suffix}"
+            names.add(name.lower())
+            copies[stored] = (source, name)
+        return f"{media_name}/{copies[stored][1]}"
 
     text = write_gedcom(tree, path, record_photo)
+    fresh = path.parent / f".{media_name}.new"
+    old = path.parent / f".{media_name}.old"
     try:
+        for leftover in (fresh, old):
+            if leftover.exists():
+                shutil.rmtree(leftover)
         if copies:
-            media = path.parent / media_name
-            media.mkdir(exist_ok=True)
-            for source in copies.values():
-                shutil.copy2(source, media / source.name)
+            fresh.mkdir()
+            for source, name in copies.values():
+                shutil.copy2(source, fresh / name)
+            (fresh / MEDIA_MARK).write_text("Made by Maiores with the GEDCOM file beside it. Replaced at each export.\n",
+                                            encoding="utf-8")
         atomic_write(path, text)
+        if media.exists():
+            media.rename(old)
+        if copies:
+            fresh.rename(media)
+        if old.exists():
+            shutil.rmtree(old)
     except OSError as error:
         raise ExportError(str(error)) from error
+    finally:
+        shutil.rmtree(fresh, ignore_errors=True)
     return len(copies)
 
 

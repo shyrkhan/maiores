@@ -1,3 +1,38 @@
+## Maiores 1.4.2
+
+A safety release: what Maiores says now always matches what is on disk, and less can slip
+out of a shared copy by accident.
+
+- **Combine keeps everything**: sources, places and face marks from the other tree are
+  saved along with the people (before, they could be lost while Combine reported
+  success). A DNA raw file comes across with its test, and nothing is combined if the
+  result would refer to something it doesn't have.
+- **No more silent loss of unsaved changes**: if a change couldn't be saved (a full disk,
+  say), closing the tree, opening another or opening the sample now asks first, just as
+  quitting did.
+- **Restore from backup** says so when the restored tree couldn't be saved, instead of
+  reporting success.
+- **A damaged tree can be recovered**: when a tree's file can't be read, Maiores offers its
+  newest good backup. The damaged file is kept beside it; photos and documents stay.
+- **GEDCOM export** makes its photo folder fresh each time, so a picture you have since
+  hidden or marked private is never left beside the file. A folder of yours with the same
+  name is never deleted.
+- **GEDCOM import** says how many documents couldn't be copied, treats a record marked
+  confidential by another program as private, and keeps a document's date and kind.
+- **Privacy**: someone of unknown status stays protected until their 100th birthday (by the
+  full date, and by the latest year of a range); a name typed on a face is no longer shared
+  when that person is hidden; merging duplicates keeps a document private if either copy
+  was; photos and documents must stay inside the tree's own folder.
+- Cancelling the Documents window removes the files it had just copied in.
+- **DNA**: a match's totals are added up again after each segment import; raw files of
+  different reference builds are no longer compared.
+- **Memory and speed**: the Guide opens one window instead of a new one each time, the
+  portrait cache has a size limit, and web pages of large trees are prepared about 100
+  times faster.
+- **Linux**: fixed a crash on closing under X11 on some systems (newer libxkbcommon);
+  the program now uses the computer's own copy. The bundled `cryptography` library is
+  updated to 50.0.2 for upstream security fixes.
+
 ## Maiores 1.4.1
 
 - **Small laptop screens**: every window now fits a 1366 x 768 screen. Editing a person

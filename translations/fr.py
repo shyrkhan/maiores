@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail} est enregistré(e) comme son propre ancêtre",
     "issue.unsafe_photo": "{detail} a une photo en dehors du dossier media",
     "issue.view_unreadable": "la vue enregistrée n'a pas pu être lue, la vue par défaut est utilisée",
+    "combine_incomplete": "Rien n'a été réuni : le résultat ferait référence à des fiches ou des fichiers absents ({what}). Votre arbre n'a pas changé.",
+    "restore_not_saved": "La sauvegarde n'a pas pu être enregistrée, elle n'a donc pas été restaurée : {error}",
+    "recover_offer": "Impossible d'ouvrir cet arbre : {error}\n\nSa sauvegarde lisible la plus récente date du {when} ({people} personnes). L'utiliser ? Le fichier endommagé est conservé à côté, et les photos et documents restent tels quels.",
+    "import_documents_failed": "Documents qui n'ont pas pu être copiés : {count}.",
+    "export_media_not_ours": "{path} existe déjà et contient d'autres éléments, les photos ne peuvent donc pas y être placées. Enregistrez le fichier sous un autre nom ou dans un autre dossier.",
+    "dna_compare_builds": "Ces fichiers bruts ne peuvent pas être comparés : ils utilisent des versions de référence différentes ({mine} et {theirs}), et seules les positions de la version 37 peuvent être mesurées en cM.",
 }

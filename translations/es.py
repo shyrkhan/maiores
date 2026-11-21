@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail} figura como su propio antepasado",
     "issue.unsafe_photo": "{detail} tiene una foto fuera de la carpeta media",
     "issue.view_unreadable": "no se pudo leer la vista guardada, así que se usa la predeterminada",
+    "combine_incomplete": "No se unió nada: el resultado haría referencia a registros o archivos que no tiene ({what}). Su árbol no ha cambiado.",
+    "restore_not_saved": "La copia no se pudo guardar, así que no se restauró: {error}",
+    "recover_offer": "Este árbol no se puede abrir: {error}\n\nSu copia legible más reciente es del {when} ({people} personas). ¿Usarla? El archivo dañado se conserva al lado, y las fotos y documentos quedan como están.",
+    "import_documents_failed": "Documentos que no se pudieron copiar: {count}.",
+    "export_media_not_ours": "{path} ya existe y contiene otras cosas, así que las fotos no se pueden poner ahí. Guarde el archivo con otro nombre o en otra carpeta.",
+    "dna_compare_builds": "Estos archivos en bruto no se pueden comparar: usan versiones de referencia distintas ({mine} y {theirs}), y solo las posiciones de la versión 37 se pueden medir en cM.",
 }

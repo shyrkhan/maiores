@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail}: kendi atası olarak kayıtlı",
     "issue.unsafe_photo": "{detail}: media klasörü dışında bir fotoğraf",
     "issue.view_unreadable": "kaydedilen görünüm okunamadı, varsayılan kullanılıyor",
+    "combine_incomplete": "Hiçbir şey birleştirilmedi: sonuç, eksik kayıtlara veya dosyalara başvururdu ({what}). Ağacınız değişmedi.",
+    "restore_not_saved": "Yedek kaydedilemedi, bu yüzden geri yüklenmedi: {error}",
+    "recover_offer": "Bu ağaç açılamıyor: {error}\n\nOkunabilen en yeni yedek {when} tarihli ({people} kişi). Kullanılsın mı? Hasarlı dosya yanında saklanır; fotoğraflar ve belgeler olduğu gibi kalır.",
+    "import_documents_failed": "Kopyalanamayan belgeler: {count}.",
+    "export_media_not_ours": "{path} zaten var ve başka şeyler içeriyor, bu yüzden fotoğraflar oraya konamaz. Dosyayı başka bir adla veya başka bir klasöre kaydedin.",
+    "dna_compare_builds": "Bu ham dosyalar karşılaştırılamaz: farklı referans sürümleri kullanıyorlar ({mine} ve {theirs}) ve yalnızca sürüm 37 konumları cM olarak ölçülebilir.",
 }

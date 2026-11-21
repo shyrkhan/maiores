@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail}: 자기 자신의 조상으로 기록되어 있습니다",
     "issue.unsafe_photo": "{detail}: 사진이 미디어 폴더 밖에 있습니다",
     "issue.view_unreadable": "저장된 보기를 읽을 수 없어 기본값을 사용합니다",
+    "combine_incomplete": "아무것도 합치지 않았습니다. 결과가 없는 기록이나 파일을 가리키게 됩니다 ({what}). 가계도는 바뀌지 않았습니다.",
+    "restore_not_saved": "백업을 저장할 수 없어 복원하지 않았습니다: {error}",
+    "recover_offer": "이 가계도를 열 수 없습니다: {error}\n\n읽을 수 있는 가장 최근 백업은 {when} 것입니다 ({people}명). 사용할까요? 손상된 파일은 옆에 보관되고 사진과 문서는 그대로 남습니다.",
+    "import_documents_failed": "복사하지 못한 문서: {count}.",
+    "export_media_not_ours": "{path}이(가) 이미 있고 다른 항목이 들어 있어 사진을 넣을 수 없습니다. 다른 이름이나 다른 폴더에 저장하세요.",
+    "dna_compare_builds": "이 원시 파일들은 비교할 수 없습니다. 참조 빌드가 다르며 ({mine}, {theirs}) cM으로는 빌드 37의 위치만 측정할 수 있습니다.",
 }

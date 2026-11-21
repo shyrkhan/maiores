@@ -14,6 +14,7 @@ import shutil
 import sys
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -100,6 +101,7 @@ from photos import PhotoCache, PhotoError, import_photo, read_image, resolve_pho
 from sample import sample_tree
 from storage import (
     TREE_FILE,
+    NewerTreeError,
     TreeLoadError,
     create_tree,
     list_backups,
@@ -107,6 +109,7 @@ from storage import (
     open_tree,
     read_backup,
     read_tree,
+    recover_from_backup,
     save_tree,
     save_view,
 )
@@ -115,6 +118,7 @@ import combine
 import icons
 import model as model_module
 import start_cards
+import dna
 import documents
 import kinship
 import poster
@@ -534,9 +538,9 @@ class MainWindow(QMainWindow):
     def close_tree(self):
         """Back to the start page, letting other windows or computers open the tree."""
         if self.tree is None:
-            return
-        if self.save_error is not None:
-            self._save()
+            return True
+        if not self._may_let_go():
+            return False
         self._release_current()
         self.tree = None
         self.folder = None
@@ -557,6 +561,18 @@ class MainWindow(QMainWindow):
         self.panel.hide()
         self.setWindowTitle(t("window_title"))
         self.refresh(keep_view=False)
+        return True
+
+    def _may_let_go(self):
+        """True when the open tree can be closed or replaced: everything is saved, or the
+        person chose to lose what couldn't be. Asked before anything changes, so No keeps
+        the tree open exactly as it was. Closing, opening another tree and the sample all ask."""
+        if self.tree is None or self.save_error is None:
+            return True
+        self._save()
+        if self.save_error is None:
+            return True
+        return self.confirm(t("close_unsaved_title"), t("close_unsaved", error=self.save_error))
 
     def show_statistics(self):
         if not self.tree or not self.tree.people:
@@ -645,7 +661,15 @@ class MainWindow(QMainWindow):
         return dialog.chosen
 
     def show_guide(self):
+        """One guide window, shown again each time: making a new one per F1 kept every old
+        one alive (a parented dialog lives as long as the main window)."""
         from PySide6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout
+        existing = getattr(self, "guide_dialog", None)
+        if existing is not None:
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle(t("menu_guide").replace("&", ""))
         fit_to_screen(dialog, 720, 640)
@@ -653,7 +677,7 @@ class MainWindow(QMainWindow):
         browser.setOpenExternalLinks(True)
         browser.setHtml(t("guide_html"))
         QVBoxLayout(dialog).addWidget(browser)
-        self.guide_dialog = dialog  # Tests read it; it stays until the next one.
+        self.guide_dialog = dialog  # Tests read it; kept for the next time.
         dialog.show()
 
     def _tour_steps(self):
@@ -1277,6 +1301,8 @@ class MainWindow(QMainWindow):
         folder = tree_folder_from(path)
         if self.folder is not None and folder.resolve() == Path(self.folder).resolve():
             return True  # Already open here (Open recent on itself): nothing to do, no "open elsewhere" alarm.
+        if not self._may_let_go():
+            return False
         lock = QLockFile(str(folder / LOCK_FILE))
         lock.setStaleLockTime(0)  # Only a dead process's lock counts as stale.
         if folder.is_dir() and not self._take_lock(lock, folder):
@@ -1284,9 +1310,10 @@ class MainWindow(QMainWindow):
         try:
             opened = open_tree(folder)
         except (TreeLoadError, OSError) as error:
-            lock.unlock()
-            self.alert(t("open_failed_title"), str(error))
-            return False
+            opened = self._offer_recovery(folder, error)
+            if opened is None:
+                lock.unlock()
+                return False
 
         self._release_current()
         self.lock = lock
@@ -1318,6 +1345,24 @@ class MainWindow(QMainWindow):
             message = t("status_issues", count=len(opened.issues), first=opened.issues[0].message())
         self.statusBar().showMessage(message)
         return True
+
+    def _offer_recovery(self, folder, error):
+        """A tree whose tree.json can't be read, but with readable backups: offer the newest
+        (the damaged file is kept beside it). Returns the opened tree, or None after saying why."""
+        backups = list_backups(folder) if folder.is_dir() and not isinstance(error, NewerTreeError) else []
+        if not backups:
+            self.alert(t("open_failed_title"), str(error))
+            return None
+        backup, when, people = backups[0]
+        label = time.strftime("%d.%m.%Y. %H:%M:%S", when)
+        if not self.confirm(t("open_failed_title"), t("recover_offer", error=error, when=label, people=people)):
+            return None
+        try:
+            recover_from_backup(folder, backup)
+            return open_tree(folder)
+        except (TreeLoadError, OSError) as again:
+            self.alert(t("open_failed_title"), str(again))
+            return None
 
     def _take_lock(self, lock, folder):
         if lock.tryLock(0):
@@ -1351,10 +1396,10 @@ class MainWindow(QMainWindow):
             result = read_gedcom(path, self.today)
 
             def gedcom_documents(their_id, _documents):
-                return self._store_documents(result.documents.get(their_id, []), self.folder)
+                return self._store_documents(result.documents.get(their_id, []), self.folder)[0]
 
             return (result.tree, lambda their_id, _stored: self._copy_photo_file(result.photos.get(their_id)),
-                    gedcom_documents, path.stem)
+                    gedcom_documents, None, path.stem)
         folder = path.parent if path.name == TREE_FILE else path
         if self.folder is not None and folder.resolve() == Path(self.folder).resolve():
             raise TreeLoadError(t("combine_same_tree"))
@@ -1369,8 +1414,27 @@ class MainWindow(QMainWindow):
                     copied.append({**document, "file": stored})
             return copied
 
+        def folder_raw(stored):
+            return self._copy_raw_file(folder, stored)
+
         return tree, lambda _their_id, stored: self._copy_photo_file(resolve_photo(folder, stored)), \
-            folder_documents, name
+            folder_documents, folder_raw, name
+
+    def _copy_raw_file(self, their_folder, stored):
+        """A DNA raw data file of their tree copied into this one's dna folder, or ""."""
+        if not stored or self.folder is None:
+            return ""
+        source = (Path(their_folder) / stored).resolve()
+        if not source.is_relative_to(Path(their_folder).resolve()) or not source.is_file():
+            return ""
+        target_dir = Path(self.folder) / dna.RAW_DIR
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / f"{uuid.uuid4().hex[:12]}-{source.name}"
+            shutil.copy2(source, target)
+        except OSError:
+            return ""
+        return f"{dna.RAW_DIR}/{target.name}"
 
     def _copy_photo_file(self, path):
         if not path or self.folder is None:
@@ -1381,17 +1445,18 @@ class MainWindow(QMainWindow):
             return ""
 
     def _store_documents(self, found, folder):
-        """[(file path, title)] from a GEDCOM file, copied into a tree folder as documents."""
-        stored = []
+        """[(file path, title, kind, date)] from a GEDCOM file, copied into a tree folder as
+        documents. Returns (the stored documents, how many could not be copied)."""
+        stored, failed = [], 0
         if folder is None:
-            return stored
-        for path, title in found:
+            return stored, len(found)
+        for path, title, kind, date in found:
             try:
                 stored.append({"file": documents.store_document(path, folder), "title": title or path.stem,
-                               "kind": "photo" if documents.is_image(path) else "other", "date": ""})
+                               "kind": kind or ("photo" if documents.is_image(path) else "other"), "date": date})
             except (documents.DocumentError, OSError):
-                continue
-        return stored
+                failed += 1
+        return stored, failed
 
     def ask_combine(self, theirs, suggestions, name, initial):
         dialog = CombineDialog(self, self.tree, theirs, suggestions, name, initial)
@@ -1399,7 +1464,7 @@ class MainWindow(QMainWindow):
 
     def combine_with(self, source):
         try:
-            theirs, copy_photo, copy_documents, name = self._read_other_tree(source)
+            theirs, copy_photo, copy_documents, copy_raw, name = self._read_other_tree(source)
         except (TreeLoadError, GedcomError) as error:
             text = t("import_not_gedcom") if str(error) == "not_gedcom" else str(error)
             self.alert(t("open_failed_title"), text)
@@ -1424,13 +1489,36 @@ class MainWindow(QMainWindow):
         def change():
             nonlocal result
             result = combine.combine(self.tree, theirs, choice["matches"], choice["take_theirs"], copy_photo,
-                                     copy_documents)
-            self.tree.people, self.tree.families = result.tree.people, result.tree.families
+                                     copy_documents, copy_raw)
+            # Only gaps the combining made: an old broken link in your tree doesn't block it.
+            missing = [item for item in combine.missing_records(result.tree) + self._missing_files(result.tree)
+                       if item not in combine.missing_records(self.tree) + self._missing_files(self.tree)]
+            if missing:  # Never report success over a gap: nothing changes, and the reason is named.
+                raise EditError(t("combine_incomplete", what=", ".join(missing[:5])))
+            # The whole tree: sources, places, faces and marks live beside the people.
+            self.tree.people, self.tree.families, self.tree.extra = \
+                result.tree.people, result.tree.families, result.tree.extra
 
-        if self.apply_edit(change):
+        if self.apply_edit(change) and self.save_error is None:
             self.inform(t("combine_title", name=name), combine.describe_result(result))
             return True
         return False
+
+    def _missing_files(self, tree):
+        """Stored paths (portraits, documents, DNA raw files) with no file in this tree's folder."""
+        if self.folder is None:
+            return []
+        missing = []
+        for person in tree.people.values():
+            stored = list(files_of(person))
+            for test in dna.tests_of(person):
+                if test.get("raw"):
+                    stored.append(test["raw"]["file"])
+            for path in stored:
+                target = (Path(self.folder) / path).resolve()
+                if not target.is_relative_to(Path(self.folder).resolve()) or not target.is_file():
+                    missing.append(path)
+        return missing
 
     # A copy for relatives.
     # The tree as a web page: a single file to send, or shown live on this network.
@@ -1576,13 +1664,19 @@ class MainWindow(QMainWindow):
                 copied += 1
             except (PhotoError, OSError):
                 failed += 1
+        documents_failed = 0
         for person_id, found in result.documents.items():
-            stored = self._store_documents(found, folder)
+            stored, not_copied = self._store_documents(found, folder)
+            documents_failed += not_copied
             if stored:
                 result.tree.people[person_id].extra["documents"] = stored
                 copied += len(stored)
         if copied:
-            save_tree(folder, result.tree)
+            try:
+                save_tree(folder, result.tree)
+            except OSError as error:
+                self.alert(t("import_title"), t("error_create_failed", error=error))
+                return False
 
         lines = [
             t(
@@ -1595,6 +1689,8 @@ class MainWindow(QMainWindow):
             lines.append(t("import_photos", count=copied))
         if failed:
             lines.append(t("import_photos_failed", count=failed))
+        if documents_failed:
+            lines.append(t("import_documents_failed", count=documents_failed))
         for code, count in result.warnings:
             lines.append(t(f"import_warn.{code}", count=count))
         problems = validate(result.tree)
@@ -1753,11 +1849,16 @@ class MainWindow(QMainWindow):
             self.tree.families = restored.families
             self.tree.extra = restored.extra
 
-        self.apply_edit(change)
+        if not self.apply_edit(change) or self.save_error is not None:
+            # Shown on screen but not on disk is not restored: say so, keep the reason.
+            self.alert(t("restore_title"), t("restore_not_saved", error=self.save_error or ""))
+            return False
         self.statusBar().showMessage(t("restore_done", when=label))
         return True
 
     def load_sample(self):
+        if not self._may_let_go():
+            return False
         self._release_current()
         self.tree = sample_tree()
         self.folder = None
@@ -1786,11 +1887,7 @@ class MainWindow(QMainWindow):
             self.lock = None
 
     def closeEvent(self, event):
-        if self.save_error is not None:
-            self._save()
-        if self.save_error is not None and not self.confirm(
-            t("close_unsaved_title"), t("close_unsaved", error=self.save_error)
-        ):
+        if not self._may_let_go():
             event.ignore()
             return
         if getattr(self, "live_share", None) is not None:

@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent
 MAP_FILE = ROOT / "assets" / "genetic_map_grch37.json.gz"
 COMPANIES = ("MyHeritage", "Ancestry", "23andMe", "FamilyTreeDNA", "GEDmatch", "LivingDNA", "Other")
 KINDS = ("autosomal", "y", "mt")
+RAW_DIR = "dna"  # Raw files live in the tree's folder; shared copies never take them.
 AUTOSOMES = [str(n) for n in range(1, 23)]
 
 # (generations up from the tester, down to the match, half) -> (average, low, high) cM.
@@ -110,6 +111,8 @@ def clean_match(item):
     match["longest"] = _number(item.get("longest"))
     for key in ("guess", "person", "notes", "source"):
         match[key] = _text(item.get(key))
+    if item.get("from_segments") is True:
+        match["from_segments"] = True  # The totals were added up here, from its segments.
     return match if match["name"] or match["person"] else None
 
 
@@ -323,6 +326,8 @@ def add_matches(test, matches):
             for key in ("cm", "segments", "longest", "guess", "source"):
                 if match.get(key) not in (None, ""):
                     old[key] = match[key]
+            if match.get("cm") is not None:
+                old.pop("from_segments", None)  # The company's own figures win from now on.
             updated += 1
     return added, updated
 
@@ -347,13 +352,25 @@ def add_segments(test, found, source=""):
             test["segments"].append(segment)
             have.add(key)
             added += 1
-    for match in by_name.values():  # A match known only from segments: its total from them.
+    for match in by_name.values():
+        # A match known only from segments: its totals from them, added up again after
+        # every import, so a second segment file counts too.
         own = [s for s in test["segments"] if s["match"] == match["id"] and s["chr"] in AUTOSOMES]
-        if own and match.get("cm") is None:
+        if own and (match.get("cm") is None or match.get("from_segments")):
             match["cm"] = round(sum(s["cm"] or 0 for s in own), 1)
             match["segments"] = len(own)
             match["longest"] = max(s["cm"] or 0 for s in own)
+            match["from_segments"] = True
     return added
+
+
+MAP_BUILD = "37"  # The genetic map's coordinates (GRCh37); positions of other builds differ.
+
+
+def comparable(info_a, info_b):
+    """Whether two raw files' positions can be compared: the same reference build, and the
+    one the genetic map is in. Otherwise the same position is a different place."""
+    return (info_a.get("build") or MAP_BUILD) == (info_b.get("build") or MAP_BUILD) == MAP_BUILD
 
 
 # Raw DNA files: 23andMe, AncestryDNA, MyHeritage, FamilyTreeDNA, LivingDNA.

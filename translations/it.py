@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail} risulta antenato di se stesso",
     "issue.unsafe_photo": "{detail} ha una foto fuori dalla cartella media",
     "issue.view_unreadable": "impossibile leggere la vista salvata, quindi viene usata quella predefinita",
+    "combine_incomplete": "Non è stato unito nulla: il risultato rimanderebbe a schede o file mancanti ({what}). Il tuo albero non è cambiato.",
+    "restore_not_saved": "Non è stato possibile salvare il backup, quindi non è stato ripristinato: {error}",
+    "recover_offer": "Impossibile aprire questo albero: {error}\n\nIl backup leggibile più recente è del {when} ({people} persone). Usarlo? Il file danneggiato viene conservato accanto, e foto e documenti restano come sono.",
+    "import_documents_failed": "Documenti che non è stato possibile copiare: {count}.",
+    "export_media_not_ours": "{path} esiste già e contiene altro, quindi le foto non possono essere messe lì. Salva il file con un altro nome o in un'altra cartella.",
+    "dna_compare_builds": "Questi file grezzi non si possono confrontare: usano build di riferimento diverse ({mine} e {theirs}), e solo le posizioni della build 37 si possono misurare in cM.",
 }

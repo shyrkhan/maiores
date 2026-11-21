@@ -939,4 +939,10 @@ TEXT = {
     "issue.ancestor_loop": "{detail} ist als eigener Vorfahre eingetragen",
     "issue.unsafe_photo": "{detail} hat ein Foto außerhalb des Medienordners",
     "issue.view_unreadable": "die gespeicherte Ansicht konnte nicht gelesen werden, daher wird die Standardansicht verwendet",
+    "combine_incomplete": "Nichts wurde zusammengeführt: Das Ergebnis würde auf Einträge oder Dateien verweisen, die fehlen ({what}). Ihr Stammbaum ist unverändert.",
+    "restore_not_saved": "Die Sicherung konnte nicht gespeichert werden und wurde daher nicht wiederhergestellt: {error}",
+    "recover_offer": "Dieser Stammbaum lässt sich nicht öffnen: {error}\n\nDie neueste lesbare Sicherung ist vom {when} ({people} Personen). Diese verwenden? Die beschädigte Datei bleibt daneben erhalten, Fotos und Dokumente bleiben unverändert.",
+    "import_documents_failed": "Dokumente, die nicht kopiert werden konnten: {count}.",
+    "export_media_not_ours": "{path} existiert bereits und enthält anderes, daher können die Fotos dort nicht abgelegt werden. Speichern Sie die Datei unter einem anderen Namen oder in einem anderen Ordner.",
+    "dna_compare_builds": "Diese Rohdaten lassen sich nicht vergleichen: Sie verwenden unterschiedliche Referenz-Builds ({mine} und {theirs}), und nur Positionen von Build 37 können in cM gemessen werden.",
 }

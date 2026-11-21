@@ -695,10 +695,15 @@ def _merge_details(keep, remove):
     tasks = _union(keep.extra.get("tasks"), remove.extra.get("tasks"))
     stories = [s for s in (keep.extra.get("story"), remove.extra.get("story")) if isinstance(s, str) and s.strip()]
     story = "\n\n".join(dict.fromkeys(stories))  # Both written down, once each.
-    documents = list(as_list(keep.extra.get("documents")))
+    documents = [dict(d) if isinstance(d, dict) else d for d in as_list(keep.extra.get("documents"))]
     for document in as_list(remove.extra.get("documents")):
-        if isinstance(document, dict) and all(document.get("file") != d.get("file") for d in documents):
+        if not isinstance(document, dict):
+            continue
+        same = next((d for d in documents if isinstance(d, dict) and d.get("file") == document.get("file")), None)
+        if same is None:
             documents.append(document)
+        elif document.get("private"):
+            same["private"] = True  # One of them kept it private: whoever is kept, it stays private.
     # A hidden person from a shared copy says nothing new, and must not hide the one kept.
     keep.extra = {**{k: v for k, v in remove.extra.items() if k != "hidden"}, **keep.extra}
     if story:
