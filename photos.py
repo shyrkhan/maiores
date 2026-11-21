@@ -1,6 +1,7 @@
 """Copying portraits into a tree's media folder, and loading them safely."""
 import collections
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -99,14 +100,19 @@ def resolve_photo(folder, stored):
 
 
 class PhotoCache:
-    """Decoded portraits, the most recently used kept up to LIMIT bytes. Keeping every one
-    until the tree closed held hundreds of megabytes on a tree full of photos."""
+    """Decoded portraits, the least recently used let go above LIMIT bytes. Keeping every
+    one until the tree closed held hundreds of megabytes on a tree full of photos. A
+    portrait used in the last few seconds is never let go: the picture on screen may need
+    more than the limit, and dropping its own photos while drawing would decode them all
+    again on every click."""
     LIMIT = 48 * 1024 * 1024
+    RECENT = 5.0  # Seconds: everything one drawing of the tree asks for.
 
-    def __init__(self, limit=None):
-        self._loaded = collections.OrderedDict()
+    def __init__(self, limit=None, clock=time.monotonic):
+        self._loaded = collections.OrderedDict()  # stored path -> (pixmap or None, last used)
         self._bytes = 0
         self.limit = self.LIMIT if limit is None else limit
+        self._clock = clock
 
     def clear(self):
         self._loaded.clear()
@@ -119,15 +125,18 @@ class PhotoCache:
     def get(self, folder, stored):
         if not stored:
             return None
+        now = self._clock()
         if stored in self._loaded:
-            self._loaded.move_to_end(stored)
-            return self._loaded[stored]
-        path = resolve_photo(folder, stored)
-        pixmap = QPixmap(str(path)) if path else QPixmap()
-        pixmap = None if pixmap.isNull() else pixmap
-        self._loaded[stored] = pixmap
-        self._bytes += self._size(pixmap)
-        while self._bytes > self.limit and len(self._loaded) > 1:
-            _old, dropped = self._loaded.popitem(last=False)
-            self._bytes -= self._size(dropped)
+            pixmap = self._loaded.pop(stored)[0]
+        else:
+            path = resolve_photo(folder, stored)
+            pixmap = QPixmap(str(path)) if path else QPixmap()
+            pixmap = None if pixmap.isNull() else pixmap
+            self._bytes += self._size(pixmap)
+        self._loaded[stored] = (pixmap, now)
+        while self._bytes > self.limit:
+            oldest = next(iter(self._loaded))
+            if now - self._loaded[oldest][1] < self.RECENT:
+                break  # Everything left is in use.
+            self._bytes -= self._size(self._loaded.pop(oldest)[0])
         return pixmap

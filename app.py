@@ -1491,8 +1491,9 @@ class MainWindow(QMainWindow):
             result = combine.combine(self.tree, theirs, choice["matches"], choice["take_theirs"], copy_photo,
                                      copy_documents, copy_raw)
             # Only gaps the combining made: an old broken link in your tree doesn't block it.
+            already = set(combine.missing_records(self.tree) + self._missing_files(self.tree))
             missing = [item for item in combine.missing_records(result.tree) + self._missing_files(result.tree)
-                       if item not in combine.missing_records(self.tree) + self._missing_files(self.tree)]
+                       if item not in already]
             if missing:  # Never report success over a gap: nothing changes, and the reason is named.
                 raise EditError(t("combine_incomplete", what=", ".join(missing[:5])))
             # The whole tree: sources, places, faces and marks live beside the people.

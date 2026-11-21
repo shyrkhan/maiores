@@ -292,7 +292,10 @@ class MediaPathTests(unittest.TestCase):
             (outside / "secret.png").write_bytes(b"x")
             folder = root / "T.tree"
             folder.mkdir()
-            (folder / "media").symlink_to(outside, target_is_directory=True)
+            try:
+                (folder / "media").symlink_to(outside, target_is_directory=True)
+            except OSError:
+                self.skipTest("this system can't make links")
             self.assertIsNone(resolve_photo(folder, "media/secret.png"))
             self.assertIsNone(documents.resolve_document(folder, "media/secret.png"))
 
@@ -306,12 +309,16 @@ class PhotoCacheTests(unittest.TestCase):
                 image = QImage(200, 200, QImage.Format.Format_RGB32)
                 image.fill(QColor("#336699"))
                 image.save(str(folder / "media" / f"{number}.png"))
-            cache = PhotoCache(limit=200 * 200 * 4 * 2)
-            for number in range(6):
+            clock = [0.0]
+            cache = PhotoCache(limit=200 * 200 * 4 * 2, clock=lambda: clock[0])
+            for number in range(6):  # One drawing needs all six: none is let go meanwhile.
                 self.assertIsNotNone(cache.get(folder, f"media/{number}.png"))
+            self.assertEqual(len(cache._loaded), 6)
+            clock[0] = 60.0  # Later, two other pictures are looked at.
+            cache.get(folder, "media/0.png")
+            cache.get(folder, "media/1.png")
             self.assertLessEqual(cache._bytes, cache.limit)
-            self.assertEqual(len(cache._loaded), 2)
-            self.assertIsNotNone(cache.get(folder, "media/0.png"))  # Loaded again when needed.
+            self.assertEqual(sorted(cache._loaded), ["media/0.png", "media/1.png"])
 
 
 class DnaTotalsTests(unittest.TestCase):
