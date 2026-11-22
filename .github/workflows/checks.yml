@@ -9,6 +9,8 @@ on:
 
 jobs:
   checks:
+    # Only the public repository builds: there GitHub's runners are free.
+    if: github.repository == 'shyrkhan/maiores'
     runs-on: ubuntu-22.04
     timeout-minutes: 35
     steps:
