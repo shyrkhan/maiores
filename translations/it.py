@@ -945,4 +945,5 @@ TEXT = {
     "import_documents_failed": "Documenti che non è stato possibile copiare: {count}.",
     "export_media_not_ours": "{path} esiste già e contiene altro, quindi le foto non possono essere messe lì. Salva il file con un altro nome o in un'altra cartella.",
     "dna_compare_builds": "Questi file grezzi non si possono confrontare: usano build di riferimento diverse ({mine} e {theirs}), e solo le posizioni della build 37 si possono misurare in cM.",
+    "share_missing": "File a cui l'albero fa riferimento ma non trovati, quindi esclusi dalla copia: {count}.",
 }

@@ -945,4 +945,5 @@ TEXT = {
     "import_documents_failed": "Kopyalanamayan belgeler: {count}.",
     "export_media_not_ours": "{path} zaten var ve başka şeyler içeriyor, bu yüzden fotoğraflar oraya konamaz. Dosyayı başka bir adla veya başka bir klasöre kaydedin.",
     "dna_compare_builds": "Bu ham dosyalar karşılaştırılamaz: farklı referans sürümleri kullanıyorlar ({mine} ve {theirs}) ve yalnızca sürüm 37 konumları cM olarak ölçülebilir.",
+    "share_missing": "Ağacın başvurduğu ancak bulunamadığı için kopyaya alınmayan dosyalar: {count}.",
 }

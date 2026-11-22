@@ -16,7 +16,7 @@ import html
 from pathlib import Path
 
 from model import (
-    date_label, fact_details, family_marriage, fold_text, person_events, person_names, person_story, tree_sources,
+    date_label, fact_details, family_marriage, fold_text, parse_date, person_events, person_names, person_story, tree_sources,
 )
 from strings import t
 
@@ -214,8 +214,12 @@ def descendant_book(tree, root_id, generations=6, notes=True, sources=True):
 
 
 def _born(tree, person_id):
-    parsed = tree.people[person_id].birth_date or "9999"
-    return parsed
+    """A sort key in birth order: the parsed date ("about 1870" before "1900"), never the
+    stored text, which sorts "abt 1870" after "1900". Undated children come last."""
+    parsed = parse_date(tree.people[person_id].birth_date)
+    if parsed is None:
+        return (1, 0, 0, 0)
+    return (0, parsed.year, parsed.month or 0, parsed.day or 0)
 
 
 def _children(tree, person_id):
@@ -272,7 +276,8 @@ def write_document(page_html, path):
         page_html = page_html.replace(mark, MARK_NAME)
     document.setHtml(page_html)
     path = Path(path)
-    temp = path.with_name(f".{path.name}.tmp")
+    from storage import temp_beside
+    temp = temp_beside(path)
     try:
         if path.suffix.lower() == ".odt":
             writer = QTextDocumentWriter(str(temp), b"odf")

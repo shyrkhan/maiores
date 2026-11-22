@@ -945,4 +945,5 @@ TEXT = {
     "import_documents_failed": "복사하지 못한 문서: {count}.",
     "export_media_not_ours": "{path}이(가) 이미 있고 다른 항목이 들어 있어 사진을 넣을 수 없습니다. 다른 이름이나 다른 폴더에 저장하세요.",
     "dna_compare_builds": "이 원시 파일들은 비교할 수 없습니다. 참조 빌드가 다르며 ({mine}, {theirs}) cM으로는 빌드 37의 위치만 측정할 수 있습니다.",
+    "share_missing": "가계도가 가리키지만 찾을 수 없어 사본에서 뺀 파일: {count}.",
 }

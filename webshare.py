@@ -163,10 +163,9 @@ def page(data, password=None):
 
 
 def single_file(path, data, password=None):
+    from storage import atomic_write
     path = Path(path)
-    temp = path.with_name(f".{path.name}.tmp")
-    temp.write_text(page(data, password), encoding="utf-8")
-    temp.replace(path)
+    atomic_write(path, page(data, password))  # A unique temporary file, removed on failure.
     return path.stat().st_size
 
 

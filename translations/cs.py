@@ -945,4 +945,5 @@ TEXT = {
     "import_documents_failed": "Dokumenty, které se nepodařilo zkopírovat: {count}.",
     "export_media_not_ours": "{path} už existuje a obsahuje jiné věci, proto tam nelze uložit fotografie. Uložte soubor pod jiným názvem nebo do jiné složky.",
     "dna_compare_builds": "Tyto surové soubory nelze porovnat: používají různé referenční verze ({mine} a {theirs}) a v cM lze měřit jen pozice verze 37.",
+    "share_missing": "Soubory, na které rodokmen odkazuje, ale nebyly nalezeny, a proto v kopii chybí: {count}.",
 }

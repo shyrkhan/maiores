@@ -12,11 +12,15 @@ out of a shared copy by accident.
   quitting did.
 - **Restore from backup** says so when the restored tree couldn't be saved, instead of
   reporting success.
-- **A damaged tree can be recovered**: when a tree's file can't be read, Maiores offers its
-  newest good backup. The damaged file is kept beside it; photos and documents stay.
+- **A damaged tree can be recovered**: when a tree's file is damaged, Maiores offers its
+  newest good backup. The damaged file is kept beside it; photos and documents stay. A
+  disk error (say, while writing a backup) never leads to this offer. A tree whose file
+  has gone missing but whose backups remain is offered them too.
 - **GEDCOM export** makes its photo folder fresh each time, so a picture you have since
-  hidden or marked private is never left beside the file. A folder of yours with the same
-  name is never deleted.
+  hidden or marked private is never left beside the file. Only a folder Maiores marked as
+  its own is replaced; if one of yours has the name, the photos go to `<name>_media-2`.
+  If the export fails at any point, the previous file and folder are put back as they were.
+  Exports and shared copies work in a private folder of their own and never delete anything else.
 - **GEDCOM import** says how many documents couldn't be copied, treats a record marked
   confidential by another program as private, and keeps a document's date and kind.
 - **Privacy**: someone of unknown status stays protected until their 100th birthday (by the
@@ -24,8 +28,36 @@ out of a shared copy by accident.
   when that person is hidden; merging duplicates keeps a document private if either copy
   was; photos and documents must stay inside the tree's own folder.
 - Cancelling the Documents window removes the files it had just copied in.
+- **A full disk is never mistaken for a missing file**: when copying a photo or document
+  fails for lack of space, combining and importing stop with a clear message instead of
+  reporting success without the file. Importing a GEDCOM file builds the new tree out of
+  sight and leaves nothing half-made behind. A tree still opens when its routine backup
+  can't be written.
+- **Copy to share** is built in a hidden folder and appears only when complete, so an
+  interrupted copy leaves nothing behind and trying again works. A file the tree refers
+  to but can't find is left out of the copy, and the message says how many.
+- **GEDCOM import** no longer records a death for someone born "between 1910 and 1940" or
+  "after 1910": an uncertain birth date never makes someone deceased.
 - **DNA**: a match's totals are added up again after each segment import; raw files of
-  different reference builds are no longer compared.
+  different reference builds are no longer compared; two matches with the same name stay
+  two people (the company's kit id is used when given); amounts written 1.234,5 are read;
+  a Windows-encoded match list is recognised whatever its length.
+- **Editing keeps what the window doesn't show**: changing only the notes no longer drops a
+  birth record that held just an address, or another name exactly as another program
+  wrote it ("Elena /Case/ Jr."). Pressing OK in Sources keeps a source's publication
+  details and abbreviation; correcting a citation's page keeps its transcription. Every
+  editing window was checked on real trees: pressing OK without a change changes nothing.
+- **Saving files**: pictures, PDFs, posters, books and web pages are written under a
+  temporary name of their own and appear only when complete, so a failed save never
+  leaves a half-written file or harms the previous one. Adding a DNA raw file says so
+  when it can't be copied.
+- **Couples**: after a partner is removed, a partner added later no longer inherits the
+  old couple's marriage; merging duplicate spouses keeps the marriage date, place,
+  witnesses and citations of either record.
+- **Places**: renaming a place onto one already known merges the two: coordinates,
+  region, old names and notes of both are kept.
+- **Map**: places on both sides of the 180th meridian are fitted on screen together.
+- **Books** list children in birth order ("about 1870" before 1900, undated last).
 - **Memory and speed**: the Guide opens one window instead of a new one each time, the
   portrait cache has a size limit, and web pages of large trees are prepared about 100
   times faster.

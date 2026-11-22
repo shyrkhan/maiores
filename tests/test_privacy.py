@@ -214,13 +214,36 @@ class DocumentTests(unittest.TestCase):
         tree = Tree({"a": Person("a", given="Ante", living="no", death={"date": "", "place": ""},
                                  extra={"documents": [{"file": stored, "title": "W"}]})}, {})
         out = self.root / "out"
-        (out / "family_media" / "mine").mkdir(parents=True)
-        (out / "family_media" / "mine" / "keep.txt").write_text("mine")
-        from exports import ExportError, export_gedcom
-        with self.assertRaises(ExportError):
-            export_gedcom(tree, self.tree_folder, out / "family.ged")
-        self.assertTrue((out / "family_media" / "mine" / "keep.txt").exists())
+        (out / "family_media").mkdir(parents=True)
+        (out / "family_media" / "letter.txt").write_text("mine")  # Flat, unmarked: still not ours.
+        from exports import export_gedcom
+        export_gedcom(tree, self.tree_folder, out / "family.ged")
+        self.assertEqual((out / "family_media" / "letter.txt").read_text(), "mine")
+        self.assertIn("family_media-2/", (out / "family.ged").read_text(encoding="utf-8"))
+        self.assertTrue(any(f.suffix == ".pdf" for f in (out / "family_media-2").iterdir()))
 
+    def test_a_failed_export_leaves_the_previous_file_and_folder(self):
+        stored = documents.store_document(self.file("will.pdf", b"will"), self.tree_folder)
+        tree = Tree({"a": Person("a", given="Ante", living="no", death={"date": "", "place": ""},
+                                 extra={"documents": [{"file": stored, "title": "W"}]})}, {})
+        out = self.root / "out"
+        out.mkdir()
+        import exports
+        exports.export_gedcom(tree, self.tree_folder, out / "family.ged")
+        before = (out / "family.ged").read_text(encoding="utf-8")
+        tree.people["a"].given = "Changed"
+        real = exports.atomic_write
+
+        def failing(path, text):
+            raise OSError("simulated failure")
+
+        exports.atomic_write = failing
+        self.addCleanup(setattr, exports, "atomic_write", real)
+        with self.assertRaises(exports.ExportError):
+            exports.export_gedcom(tree, self.tree_folder, out / "family.ged")
+        self.assertEqual((out / "family.ged").read_text(encoding="utf-8"), before)
+        self.assertTrue(any(f.suffix == ".pdf" for f in (out / "family_media").iterdir()))
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["family.ged", "family_media"])
 
 if __name__ == "__main__":
     unittest.main()

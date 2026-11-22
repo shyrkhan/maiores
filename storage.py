@@ -68,6 +68,11 @@ class TreeLoadError(Exception):
     """The tree could not be opened. The files on disk have not been touched."""
 
 
+class DamagedTreeError(TreeLoadError):
+    """The file was read but isn't a sound tree (broken JSON or structure): the only case
+    in which a backup is offered in its place. A disk error is not damage."""
+
+
 class NewerTreeError(TreeLoadError):
     """Saved by a newer Maiores. Not damaged: an older backup must not be offered over it."""
 
@@ -98,7 +103,19 @@ def atomic_write(path, text):
     except BaseException:
         Path(temp_name).unlink(missing_ok=True)
         raise
-    _sync_directory(path.parent)
+    try:
+        _sync_directory(path.parent)
+    except OSError:
+        pass  # The new file is already in place: reporting a failure now would be untrue.
+
+
+def temp_beside(path):
+    """A new, empty file with a name no one else has, beside `path`: a replacement is written
+    there and then moved over `path`. A fixed name (".family.pdf.tmp") could be a file of
+    the person's own, overwritten and then deleted."""
+    handle, name = tempfile.mkstemp(prefix=f".{Path(path).name}.", suffix=".tmp", dir=Path(path).parent)
+    os.close(handle)
+    return Path(name)
 
 
 def _sync_directory(directory):
@@ -118,11 +135,13 @@ def _to_json(data):
 
 def _read_json(path):
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise TreeLoadError(
-            t("error_unreadable", name=Path(path).name, detail=error)
-        ) from error
+        data = Path(path).read_bytes()
+    except OSError as error:
+        raise TreeLoadError(t("error_unreadable", name=Path(path).name, detail=error)) from error
+    try:
+        return json.loads(data.decode("utf-8"))
+    except ValueError as error:  # Not JSON, or not UTF-8: the file itself is damaged.
+        raise DamagedTreeError(t("error_unreadable", name=Path(path).name, detail=error)) from error
 
 
 def _backups(folder):
@@ -204,7 +223,7 @@ def _backup_is_due(folder):
 def _check_version(data, name):
     version = data.get("format_version") if isinstance(data, dict) else None
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
-        raise TreeLoadError(t("error_format", name=name, detail="bad format_version"))
+        raise DamagedTreeError(t("error_format", name=name, detail="bad format_version"))
     if version > FORMAT_VERSION:
         raise NewerTreeError(t("error_newer", name=name, version=version))
     return version
@@ -252,6 +271,9 @@ def open_tree(folder):
     folder = Path(folder)
     tree_file = folder / TREE_FILE
     if not tree_file.is_file():
+        if not tree_file.exists() and (folder / BACKUP_DIR).is_dir():
+            # The tree's own folder with backups, but its file gone: that is damage too.
+            raise DamagedTreeError(t("error_no_tree", path=folder))
         raise TreeLoadError(t("error_no_tree", path=folder))
     data = _read_json(tree_file)
     version = _check_version(data, TREE_FILE)
@@ -259,8 +281,11 @@ def open_tree(folder):
     try:
         tree = Tree.from_dict(data)
     except TreeFormatError as error:
-        raise TreeLoadError(t("error_format", name=TREE_FILE, detail=error)) from error
-    make_backup(folder)
+        raise DamagedTreeError(t("error_format", name=TREE_FILE, detail=error)) from error
+    try:
+        make_backup(folder)
+    except OSError:
+        pass  # A full disk mustn't keep you out of your tree; the next save tries again.
     house, view_issues = _read_view(folder)
     if house not in tree.people:
         house = None

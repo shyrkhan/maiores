@@ -6,7 +6,6 @@ Tiles overlap by OVERLAP_MM so they can be glued; each carries its row and colum
 small corner marks showing where to cut.
 """
 import math
-from pathlib import Path
 
 from PySide6.QtCore import QMarginsF, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPageLayout, QPageSize, QPainter, QPdfWriter, QPen
@@ -37,7 +36,8 @@ def plan(area, paper="A4", across=1):
 def write_poster(scene, area, path, paper="A4", across=1, label=lambda row, column: ""):
     """Draw `area` of `scene` onto one sheet, or onto tiles `across` sheets wide."""
     orientation, rows, columns = plan(area, paper, across)
-    temp = Path(path).with_name(f".{Path(path).name}.tmp")
+    from storage import temp_beside
+    temp = temp_beside(path)
     writer = QPdfWriter(str(temp))
     writer.setResolution(DPI)
     writer.setPageLayout(QPageLayout(QPageSize(PAPERS[paper]), orientation,

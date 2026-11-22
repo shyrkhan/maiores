@@ -39,6 +39,18 @@ def to_degrees(x, y, zoom):
     return lat, lon
 
 
+def _shortest_way_round(points):
+    """The points with longitudes shifted by 360 where that brings them together: 179 E and
+    179 W are 2 degrees apart across the 180th meridian, not 358 the other way."""
+    lons = sorted({lon % 360.0 for _lat, lon in points})
+    if len(lons) < 2:
+        return list(points)
+    gaps = [(lons[(i + 1) % len(lons)] - lons[i]) % 360.0 for i in range(len(lons))]
+    widest = max(range(len(lons)), key=lambda i: gaps[i])
+    start = lons[(widest + 1) % len(lons)]  # The span starts after the widest empty stretch.
+    return [(lat, start + (lon % 360.0 - start) % 360.0) for lat, lon in points]
+
+
 _MANAGERS = {}
 
 
@@ -136,8 +148,13 @@ class MapView(QWidget):
         return cx - self.width() / 2, cy - self.height() / 2
 
     def screen_point(self, lat, lon):
+        """The map repeats east-west: a point is drawn in the copy nearest the centre, so
+        places either side of the 180th meridian sit side by side."""
         x, y = to_pixel(lat, lon, self.zoom)
         ox, oy = self._origin()
+        world = TILE * 2 ** self.zoom
+        cx = ox + self.width() / 2
+        x += round((cx - x) / world) * world
         return QPointF(x - ox, y - oy)
 
     def degrees_at(self, point):
@@ -148,12 +165,14 @@ class MapView(QWidget):
         """Centre and zoom so every point shows."""
         if not points:
             return
+        points = _shortest_way_round(points)
         for zoom in range(MAX_ZOOM - 4, MIN_ZOOM - 1, -1):
             xs, ys = zip(*(to_pixel(lat, lon, zoom) for lat, lon in points))
             if max(xs) - min(xs) < self.width() * 0.8 and max(ys) - min(ys) < self.height() * 0.8:
                 break
         self.zoom = zoom
-        self.centre = to_degrees((max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2, zoom)
+        lat, lon = to_degrees((max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2, zoom)
+        self.centre = (lat, (lon + 180.0) % 360.0 - 180.0)
         self.update()
 
     def visible_tiles(self):

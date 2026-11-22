@@ -945,4 +945,5 @@ TEXT = {
     "import_documents_failed": "Dokumente, die nicht kopiert werden konnten: {count}.",
     "export_media_not_ours": "{path} existiert bereits und enthält anderes, daher können die Fotos dort nicht abgelegt werden. Speichern Sie die Datei unter einem anderen Namen oder in einem anderen Ordner.",
     "dna_compare_builds": "Diese Rohdaten lassen sich nicht vergleichen: Sie verwenden unterschiedliche Referenz-Builds ({mine} und {theirs}), und nur Positionen von Build 37 können in cM gemessen werden.",
+    "share_missing": "Dateien, auf die der Stammbaum verweist, die aber fehlen und daher nicht in der Kopie sind: {count}.",
 }

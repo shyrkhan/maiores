@@ -111,6 +111,8 @@ def clean_match(item):
     match["longest"] = _number(item.get("longest"))
     for key in ("guess", "person", "notes", "source"):
         match[key] = _text(item.get(key))
+    if _text(item.get("kit")):
+        match["kit"] = _text(item.get("kit"))  # The company's id for the match: names repeat.
     if item.get("from_segments") is True:
         match["from_segments"] = True  # The totals were added up here, from its segments.
     return match if match["name"] or match["person"] else None
@@ -233,13 +235,28 @@ def _cm_value(text):
     number = found[1] if found else (re.search(r"[\d.,]+", text) or [None])[0]
     if number is None:
         return None
-    number = number.replace(",", "") if re.search(r"\d,\d{3}", number) else number.replace(",", ".")
+    number = number.strip(".,")
+    if "," in number and "." in number:  # Whichever comes last is the decimal mark.
+        if number.rfind(",") > number.rfind("."):
+            number = number.replace(".", "").replace(",", ".")  # 1.234,5
+        else:
+            number = number.replace(",", "")  # 1,234.5
+    elif "," in number:
+        thousands = re.fullmatch(r"\d{1,3}(,\d{3})+", number)
+        number = number.replace(",", "") if thousands else number.replace(",", ".")
     return _number(number)
+
+
+KIT_COLUMNS = ("kit", "kitnumber", "kitid", "matchkit", "matchkitid", "matchid", "matchguid", "testid",
+               "matchtestid", "profileid", "kit2")
 
 
 def read_table(data):
     """A CSV file's rows as (headers, rows), whatever the separator and encoding."""
-    for encoding in ("utf-8-sig", "utf-16", "cp1252"):
+    # UTF-16 only when the file says so (a byte-order mark, or the zero bytes it is full
+    # of): tried blindly, any even-length Windows file "decodes" as UTF-16 nonsense.
+    utf16 = data[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in data[:4000]
+    for encoding in ("utf-8-sig",) + (("utf-16",) if utf16 else ()) + ("cp1252",):
         try:
             text = data.decode(encoding)
             break
@@ -271,6 +288,7 @@ def read_match_file(data, source=""):
                      lambda k: "name" in k)
         cm = _find(headers, lambda k: "centimorgan" in k or k in ("cm", "segmentcm", "lengthcm"))
         snps = _find(headers, lambda k: "snp" in k)
+        kit = _find(headers, lambda k: k in KIT_COLUMNS)
         found = []
         for row in rows:
             cell = lambda i: row[i].strip() if i is not None and i < len(row) else ""
@@ -278,7 +296,7 @@ def read_match_file(data, source=""):
                                      "end": cell(end).replace(",", ""), "cm": _cm_value(cell(cm)),
                                      "snps": cell(snps).replace(",", "")})
             if segment and cell(name):
-                found.append((cell(name), segment))
+                found.append((cell(name), segment, cell(kit)))
         return "segments", found
     name = _find(headers, lambda k: k in ("fullname", "matchname", "displayname", "name"),
                  lambda k: k.endswith("name") and "first" not in k and "last" not in k and "middle" not in k
@@ -290,6 +308,7 @@ def read_match_file(data, source=""):
                and "%" not in k and "percent" not in k, avoid=("largest", "longest", "segments"))
     percent = _find(headers, lambda k: ("percent" in k or "%" in k) and ("dna" in k or "shared" in k))
     segments = _find(headers, lambda k: "segment" in k and "largest" not in k and "longest" not in k)
+    kit = _find(headers, lambda k: k in KIT_COLUMNS)
     guess = _find(headers, lambda k: "estimatedrelationship" in k or "relationshiprange" in k or
                   "suggestedrelationship" in k or "predictedrelationship" in k or k == "relationship")
     if (name is None and first is None) or (cm is None and percent is None):
@@ -304,46 +323,82 @@ def read_match_file(data, source=""):
         if amount is None and percent is not None:  # 23andMe: share of the whole genome.
             share = _cm_value(cell(percent).replace("%", ""))
             amount = round(share * GENOME_CM / 100, 1) if share is not None else None
-        match = clean_match({"name": who, "cm": amount, "segments": _cm_value(cell(segments)),
+        match = clean_match({"name": who, "kit": cell(kit), "cm": amount, "segments": _cm_value(cell(segments)),
                              "longest": _cm_value(cell(longest)), "guess": cell(guess), "source": source})
         if match:
             matches.append(match)
     return "matches", matches
 
 
+def _index(test):
+    """Lookups for a test's matches: by kit id, and by name (a list: names repeat)."""
+    by_kit = {m["kit"]: m for m in test["matches"] if m.get("kit")}
+    by_name = {}
+    for match in test["matches"]:
+        if match["name"]:
+            by_name.setdefault(match["name"].casefold(), []).append(match)
+    return by_kit, by_name
+
+
+def _existing(by_kit, by_name, name, kit, used):
+    """The match a row means: the same kit id when the row has one; otherwise the next
+    match of that name this file hasn't already used (two Ana rows mean two Anas, and the
+    same file read again finds the same two). A match with another kit id is never taken."""
+    if kit and kit in by_kit:
+        return by_kit[kit]
+    for match in by_name.get(name.casefold(), []):
+        if id(match) in used or (kit and match.get("kit") and match["kit"] != kit):
+            continue
+        return match
+    return None
+
+
 def add_matches(test, matches):
-    """New matches join the test; one already there (same name) gets the new figures, and
-    keeps its link and notes. Returns (added, updated)."""
-    by_name = {m["name"].casefold(): m for m in test["matches"] if m["name"]}
+    """New matches join the test; one already there gets the new figures, and keeps its
+    link and notes (see _existing for which one is "already there"). Returns (added, updated)."""
+    by_kit, by_name = _index(test)
+    used = set()
     added = updated = 0
     for match in matches:
-        old = by_name.get(match["name"].casefold())
+        old = _existing(by_kit, by_name, match["name"], match.get("kit", ""), used)
         if old is None:
             test["matches"].append(match)
-            by_name[match["name"].casefold()] = match
+            by_name.setdefault(match["name"].casefold(), []).append(match)
+            if match.get("kit"):
+                by_kit[match["kit"]] = match
+            used.add(id(match))
             added += 1
-        else:
-            for key in ("cm", "segments", "longest", "guess", "source"):
-                if match.get(key) not in (None, ""):
-                    old[key] = match[key]
-            if match.get("cm") is not None:
-                old.pop("from_segments", None)  # The company's own figures win from now on.
-            updated += 1
+            continue
+        used.add(id(old))
+        if match.get("kit"):
+            old["kit"] = match["kit"]
+            by_kit[match["kit"]] = old
+        for key in ("cm", "segments", "longest", "guess", "source"):
+            if match.get(key) not in (None, ""):
+                old[key] = match[key]
+        if match.get("cm") is not None:
+            old.pop("from_segments", None)  # The company's own figures win from now on.
+        updated += 1
     return added, updated
 
 
 def add_segments(test, found, source=""):
-    """Segments by match name: matched to the test's matches, or new matches made from
-    them. A segment already there (same match and place) is not added twice."""
-    by_name = {m["name"].casefold(): m for m in test["matches"] if m["name"]}
+    """Segments by match (name, segment) or (name, segment, kit id): joined to the test's
+    match with that kit id, else the first of that name, or a new match made from them.
+    A segment already there (same match and place) is not added twice."""
+    by_kit, by_name = _index(test)
     have = {(s["match"], s["chr"], s["start"], s["end"]) for s in test["segments"]}
     added = 0
-    for name, segment in found:
-        match = by_name.get(name.casefold())
+    for entry in found:
+        name, segment = entry[0], entry[1]
+        kit = entry[2] if len(entry) > 2 else ""
+        match = _existing(by_kit, by_name, name, kit, set())
         if match is None:
-            match = clean_match({"name": name, "source": source})
+            match = clean_match({"name": name, "kit": kit, "source": source})
             test["matches"].append(match)
-            by_name[name.casefold()] = match
+            by_name.setdefault(name.casefold(), []).append(match)
+            if kit:
+                by_kit[kit] = match
         segment = {**segment, "match": match["id"]}
         if segment["cm"] is None:
             segment["cm"] = round(segment_cm(segment["chr"], segment["start"], segment["end"]), 2)
@@ -352,7 +407,7 @@ def add_segments(test, found, source=""):
             test["segments"].append(segment)
             have.add(key)
             added += 1
-    for match in by_name.values():
+    for match in test["matches"]:
         # A match known only from segments: its totals from them, added up again after
         # every import, so a second segment file counts too.
         own = [s for s in test["segments"] if s["match"] == match["id"] and s["chr"] in AUTOSOMES]

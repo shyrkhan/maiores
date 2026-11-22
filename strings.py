@@ -284,6 +284,7 @@ STRINGS = {
         "menu_share_copy": "Make a copy to &share...",
         "share_title": "Copy to share",
         "share_name": "{name} (to share)",
+        "share_missing": "Files this tree refers to but couldn't find, and so left out of the copy: {count}.",
         "share_done": "Saved {path}.\n\nFiles copied: {files}. People shown only by surname: {hidden}.\n\nPrivate items were left out. Send the whole folder; the relative opens it with File > Open, or combines it with their own tree.",
         "field_other_names": "Other names",
         "button_other_names": "Other names ({count})...",

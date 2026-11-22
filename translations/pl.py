@@ -945,4 +945,5 @@ TEXT = {
     "import_documents_failed": "Dokumenty, których nie udało się skopiować: {count}.",
     "export_media_not_ours": "{path} już istnieje i zawiera inne rzeczy, więc nie można tam umieścić zdjęć. Zapisz plik pod inną nazwą lub w innym folderze.",
     "dna_compare_builds": "Tych surowych plików nie można porównać: używają różnych wersji referencyjnych ({mine} i {theirs}), a w cM można mierzyć tylko pozycje wersji 37.",
+    "share_missing": "Pliki, do których odwołuje się drzewo, ale których nie znaleziono, więc nie ma ich w kopii: {count}.",
 }

@@ -12,6 +12,7 @@ import importlib
 import os
 import shutil
 import sys
+import tempfile
 import time
 import traceback
 import uuid
@@ -84,6 +85,7 @@ from model import (
     Tree,
     TreeIndex,
     all_facts,
+    as_list,
     fold_text,
     date_input_text,
     date_warnings,
@@ -101,7 +103,7 @@ from photos import PhotoCache, PhotoError, import_photo, read_image, resolve_pho
 from sample import sample_tree
 from storage import (
     TREE_FILE,
-    NewerTreeError,
+    DamagedTreeError,
     TreeLoadError,
     create_tree,
     list_backups,
@@ -1349,7 +1351,9 @@ class MainWindow(QMainWindow):
     def _offer_recovery(self, folder, error):
         """A tree whose tree.json can't be read, but with readable backups: offer the newest
         (the damaged file is kept beside it). Returns the opened tree, or None after saying why."""
-        backups = list_backups(folder) if folder.is_dir() and not isinstance(error, NewerTreeError) else []
+        # Only when tree.json itself is damaged: a disk error (say, writing the routine
+        # backup) or a newer program's file must never lead to rolling back a sound tree.
+        backups = list_backups(folder) if isinstance(error, DamagedTreeError) else []
         if not backups:
             self.alert(t("open_failed_title"), str(error))
             return None
@@ -1428,12 +1432,9 @@ class MainWindow(QMainWindow):
         if not source.is_relative_to(Path(their_folder).resolve()) or not source.is_file():
             return ""
         target_dir = Path(self.folder) / dna.RAW_DIR
-        try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target = target_dir / f"{uuid.uuid4().hex[:12]}-{source.name}"
-            shutil.copy2(source, target)
-        except OSError:
-            return ""
+        target_dir.mkdir(parents=True, exist_ok=True)  # A disk error is raised, not taken for "no file".
+        target = target_dir / f"{uuid.uuid4().hex[:12]}-{source.name}"
+        shutil.copy2(source, target)
         return f"{dna.RAW_DIR}/{target.name}"
 
     def _copy_photo_file(self, path):
@@ -1441,8 +1442,8 @@ class MainWindow(QMainWindow):
             return ""
         try:
             return import_photo(path, self.folder)
-        except (PhotoError, OSError):
-            return ""
+        except PhotoError:
+            return ""  # Not a usable picture. A disk error is raised: success must not be reported over it.
 
     def _store_documents(self, found, folder):
         """[(file path, title, kind, date)] from a GEDCOM file, copied into a tree folder as
@@ -1454,8 +1455,8 @@ class MainWindow(QMainWindow):
             try:
                 stored.append({"file": documents.store_document(path, folder), "title": title or path.stem,
                                "kind": kind or ("photo" if documents.is_image(path) else "other"), "date": date})
-            except (documents.DocumentError, OSError):
-                failed += 1
+            except documents.DocumentError:
+                failed += 1  # Refused (kind, size, gone). A disk error is raised to the caller.
         return stored, failed
 
     def ask_combine(self, theirs, suggestions, name, initial):
@@ -1488,8 +1489,11 @@ class MainWindow(QMainWindow):
 
         def change():
             nonlocal result
-            result = combine.combine(self.tree, theirs, choice["matches"], choice["take_theirs"], copy_photo,
-                                     copy_documents, copy_raw)
+            try:
+                result = combine.combine(self.tree, theirs, choice["matches"], choice["take_theirs"], copy_photo,
+                                         copy_documents, copy_raw)
+            except OSError as error:  # Copying their files failed: nothing is combined.
+                raise EditError(t("error_create_failed", error=error)) from error
             # Only gaps the combining made: an old broken link in your tree doesn't block it.
             already = set(combine.missing_records(self.tree) + self._missing_files(self.tree))
             missing = [item for item in combine.missing_records(result.tree) + self._missing_files(result.tree)
@@ -1602,27 +1606,55 @@ class MainWindow(QMainWindow):
         if self.folder is not None and target.resolve() == Path(self.folder).resolve():
             self.alert(t("share_title"), t("combine_same_tree"))
             return False
-        shared = privacy.shareable(self.tree, self.today, hide_living=hide)
+        if target.exists():
+            self.alert(t("share_title"), t("error_tree_exists", path=target))
+            return False
+        # A file this tree refers to but doesn't have can't be sent: the copy leaves the
+        # reference out too (so it never points at nothing), and the message says so.
+        source_tree, missing = copy_tree(self.tree), 0
+        for person in source_tree.people.values():
+            if person.photo and resolve_photo(self.folder, person.photo) is None:
+                person.photo, missing = "", missing + 1
+            kept = [d for d in as_list(person.extra.get("documents"))
+                    if not isinstance(d, dict) or resolve_photo(self.folder, d.get("file", "")) is not None]
+            missing += len(as_list(person.extra.get("documents"))) - len(kept)
+            if "documents" in person.extra:
+                person.extra["documents"] = kept
+        shared = privacy.shareable(source_tree, self.today, hide_living=hide)
+        # Built in a hidden folder beside it and renamed into place only when complete: an
+        # interrupted copy never looks like a finished tree, and trying again works.
+        work = None
         try:
-            create_tree(target, shared)
+            # A private working folder (a name nobody else chose): only it is ever deleted.
+            target.parent.mkdir(parents=True, exist_ok=True)
+            work = Path(tempfile.mkdtemp(prefix=f".{target.stem}-share-", dir=target.parent))
+            partial = work / target.name
+            create_tree(partial, shared)
             copied = 0
             for person in shared.people.values():
                 for stored in files_of(person):
                     source = resolve_photo(self.folder, stored)  # Safe path inside media, existing file.
-                    if source is None:
-                        continue
-                    destination = target / stored
+                    destination = partial / stored
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, destination)
                     copied += 1
+            if target.exists():
+                raise FileExistsError(target)
+            partial.rename(target)
         except FileExistsError:
             self.alert(t("share_title"), t("error_tree_exists", path=target))
             return False
         except OSError as error:
             self.alert(t("share_title"), t("error_create_failed", error=error))
             return False
-        self.inform(t("share_title"), t("share_done", path=target, files=copied,
-                                        hidden=sum(privacy.is_hidden(p) for p in shared.people.values())))
+        finally:
+            if work is not None:
+                shutil.rmtree(work, ignore_errors=True)
+        text = t("share_done", path=target, files=copied,
+                 hidden=sum(privacy.is_hidden(p) for p in shared.people.values()))
+        if missing:
+            text += "\n\n" + t("share_missing", count=missing)
+        self.inform(t("share_title"), text)
         return True
 
     # GEDCOM and pictures.
@@ -1649,35 +1681,44 @@ class MainWindow(QMainWindow):
         folder = Path(target)
         if folder.suffix != TREE_SUFFIX:
             folder = folder.with_name(folder.name + TREE_SUFFIX)
+        if folder.exists():
+            self.alert(t("import_title"), t("error_tree_exists", path=folder))
+            return False
+        # Made in a private working folder and moved into place only when complete: a
+        # failure (a full disk) leaves nothing half-made behind, and trying again works.
+        copied = failed = documents_failed = 0
+        work = None
         try:
-            create_tree(folder, result.tree)
+            folder.parent.mkdir(parents=True, exist_ok=True)
+            work = Path(tempfile.mkdtemp(prefix=f".{folder.stem}-import-", dir=folder.parent))
+            staged = work / folder.name
+            create_tree(staged, result.tree)
+            for person_id, photo in result.photos.items():
+                try:
+                    result.tree.people[person_id].photo = import_photo(photo, staged)
+                    copied += 1
+                except PhotoError:
+                    failed += 1  # Not a usable picture; a disk error stops the import.
+            for person_id, found in result.documents.items():
+                stored, not_copied = self._store_documents(found, staged)
+                documents_failed += not_copied
+                if stored:
+                    result.tree.people[person_id].extra["documents"] = stored
+                    copied += len(stored)
+            if copied:
+                save_tree(staged, result.tree)
+            if folder.exists():
+                raise FileExistsError(folder)
+            staged.rename(folder)
         except FileExistsError:
             self.alert(t("import_title"), t("error_tree_exists", path=folder))
             return False
         except OSError as error:
             self.alert(t("import_title"), t("error_create_failed", error=error))
             return False
-
-        copied = failed = 0
-        for person_id, photo in result.photos.items():
-            try:
-                result.tree.people[person_id].photo = import_photo(photo, folder)
-                copied += 1
-            except (PhotoError, OSError):
-                failed += 1
-        documents_failed = 0
-        for person_id, found in result.documents.items():
-            stored, not_copied = self._store_documents(found, folder)
-            documents_failed += not_copied
-            if stored:
-                result.tree.people[person_id].extra["documents"] = stored
-                copied += len(stored)
-        if copied:
-            try:
-                save_tree(folder, result.tree)
-            except OSError as error:
-                self.alert(t("import_title"), t("error_create_failed", error=error))
-                return False
+        finally:
+            if work is not None:
+                shutil.rmtree(work, ignore_errors=True)
 
         lines = [
             t(

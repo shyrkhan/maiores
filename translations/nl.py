@@ -945,4 +945,5 @@ TEXT = {
     "import_documents_failed": "Documenten die niet konden worden gekopieerd: {count}.",
     "export_media_not_ours": "{path} bestaat al en bevat andere dingen, dus de foto's kunnen daar niet worden geplaatst. Sla het bestand op onder een andere naam of in een andere map.",
     "dna_compare_builds": "Deze ruwe bestanden kunnen niet worden vergeleken: ze gebruiken verschillende referentiebuilds ({mine} en {theirs}), en alleen posities van build 37 kunnen in cM worden gemeten.",
+    "share_missing": "Bestanden waarnaar de stamboom verwijst maar die niet zijn gevonden en dus niet in de kopie staan: {count}.",
 }

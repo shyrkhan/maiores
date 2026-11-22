@@ -172,6 +172,9 @@ class CitationDialog(QDialog):
         self.setWindowTitle(t("citation_title"))
         self.setMinimumWidth(480)
         citation = citation or {}
+        # What the window doesn't show (a transcription from another program's file)
+        # goes back unchanged with the edited citation.
+        self.unseen = {k: v for k, v in citation.items() if k not in ("source", "page", "quality", "document")}
         self.source = QComboBox()
         self._fill_sources(citation.get("source"))
         new_source = QPushButton(t("citation_new_source"))
@@ -226,7 +229,7 @@ class CitationDialog(QDialog):
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(self.source.currentData() is not None)
 
     def values(self):
-        entry = {"source": self.source.currentData()}
+        entry = {**self.unseen, "source": self.source.currentData()}
         if self.page.text().strip():
             entry["page"] = self.page.text().strip()
         if self.quality.currentData() != "unknown":
@@ -335,6 +338,10 @@ class NameDialog(QDialog):
         self.setWindowTitle(t("other_name_title"))
         self.setMinimumWidth(440)
         item = item or {"type": "other"}
+        # What the window doesn't show (a label, the name as another program wrote it)
+        # goes back with it; "as written" only while the name itself is unchanged.
+        self.original = item
+        self.unseen = {k: v for k, v in item.items() if k not in ("given", "surname", "type", "date", "citations")}
         self.given = QLineEdit(item.get("given", ""))
         self.surname = QLineEdit(item.get("surname", ""))
         self.kind = QComboBox()
@@ -377,6 +384,8 @@ class NameDialog(QDialog):
     def values(self):
         item = {"given": self.given.text().strip(), "surname": self.surname.text().strip(),
                 "type": self.kind.currentData(), "date": self.date.text().strip()}
+        same = all(item[k] == (self.original.get(k) or "").strip() for k in ("given", "surname", "type"))
+        item = {**{k: v for k, v in self.unseen.items() if same or k != "written"}, **item}
         if self.citations:
             item["citations"] = self.citations
         return item

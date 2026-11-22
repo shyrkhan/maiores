@@ -1097,9 +1097,12 @@ def _living_status(record, birth, today):
     if record.first("DEAT") is not None:
         return "no"
     parsed = parse_date((birth or {}).get("date", ""))
-    if parsed and today.year - parsed.year > _LIVING_LIMIT_YEARS:
+    if parsed is None or parsed.qualifier == "aft":
+        return "unknown"  # "After 1910" could be any time since: never a death asserted.
+    # A range counts from its latest year: "between 1910 and 1940" may be 86 today.
+    if today.year - (parsed.end_year or parsed.year) > _LIVING_LIMIT_YEARS:
         return "no"
-    return "yes" if parsed else "unknown"
+    return "unknown" if parsed.end_year else "yes"
 
 
 PICTURE_TYPES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}

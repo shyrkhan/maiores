@@ -88,7 +88,7 @@ def _selection(window):
         if not window.panel.isVisible() and window.isVisible() and getattr(window, "panel_enabled", True):
             problems.append(Problem("panel_hidden", FAIL, "someone is selected but the panel is hidden"))
         expected = tree.people[window.selected].display_name
-        if window.panel.name.text() != expected:
+        if window.panel.name.text().split("\n")[0] != expected:  # A second line may say "Private".
             problems.append(
                 Problem("panel_stale", FAIL, f"panel shows {window.panel.name.text()!r}, not {expected!r}")
             )

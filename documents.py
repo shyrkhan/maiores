@@ -60,8 +60,12 @@ def store_document(source, folder, created=None):
     target = docs / name
     if not target.exists():
         temp = docs / f".{name}.tmp"
-        shutil.copyfile(source, temp)
-        os.replace(temp, target)
+        try:
+            shutil.copyfile(source, temp)
+            os.replace(temp, target)
+        except BaseException:
+            temp.unlink(missing_ok=True)  # No half-copied file left in the tree.
+            raise
         if created is not None:
             created.append(f"{MEDIA_DIR}/{DOCS_DIR}/{name}")
     return f"{MEDIA_DIR}/{DOCS_DIR}/{name}"
@@ -83,5 +87,5 @@ def copy_from_tree(their_folder, stored, my_folder):
         return ""
     try:
         return store_document(source, my_folder)
-    except (DocumentError, OSError):
-        return ""
+    except DocumentError:
+        return ""  # A file of a kind or size not taken. A disk error is raised: it isn't "no file".

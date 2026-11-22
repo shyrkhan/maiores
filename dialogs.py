@@ -804,8 +804,19 @@ class PlacesDialog(QDialog):
 
     def _saved(self, old, new, record):
         import edits
+        from model import place_records
         try:
-            if new != old:
+            if new != old and new in place_records(self.work):
+                # Renamed onto a place already known: the two are merged, and the form
+                # (which showed only the renamed one) adds to it rather than replacing it.
+                edits.rename_place(self.work, old, new)
+                merged = place_records(self.work).get(new, {})
+                given = {k: v for k, v in record.items() if v not in ("", None, [])}
+                record = {**merged, **given}
+                if merged.get("old_names") or given.get("old_names"):
+                    names = list(merged.get("old_names", []))
+                    record["old_names"] = names + [n for n in given.get("old_names", []) if n not in names]
+            elif new != old:
                 edits.rename_place(self.work, old, new)
             edits.set_place(self.work, new, record)
         except edits.EditError as error:

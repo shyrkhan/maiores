@@ -5,6 +5,7 @@ Everything is changed on a copy of the tests; the window returns them, and the m
 window stores them as one edit (one undo)."""
 import copy
 import gzip
+import os
 import re
 import uuid
 import zipfile
@@ -584,9 +585,15 @@ class DnaDialog(QDialog):
         if self.folder is None:
             return self._report(t("dna_import_failed", detail=""))
         target = self.folder / RAW_DIR / f"{test['id']}-{uuid.uuid4().hex[:8]}.txt.gz"  # Never over an older one.
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with gzip.open(target, "wb") as handle:
-            handle.write(data)
+        temp = target.with_name(f".{target.name}.tmp")  # A new random name: nobody else's file.
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with gzip.open(temp, "wb") as handle:
+                handle.write(data)
+            os.replace(temp, target)
+        except OSError as error:  # A full disk: no half-written file stays in the tree.
+            temp.unlink(missing_ok=True)
+            return self._report(t("dna_import_failed", detail=str(error)))
         self.new_raw_files.append(target)
         _calls, info = dna.read_raw(target)
         if not info["snps"]:

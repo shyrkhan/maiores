@@ -10,6 +10,8 @@ from model import (
     CHILD_LINKS,
     EVENT_TYPES,
     NAME_TYPES,
+    SOURCE_FIELDS,
+    person_names,
     RELATIONSHIPS,
     Family,
     Person,
@@ -141,6 +143,12 @@ def _carry(old, new):
 def update_person(tree, person_id, values):
     fields = clean_fields(values)
     person = _person(tree, person_id)
+    old_birth = person.birth
+    if fields.get("birth") is None and isinstance(old_birth, dict) and not old_birth.get("date") \
+            and not old_birth.get("place"):
+        # A birth recorded without a date or place ("1 BIRT" from another program, or one
+        # known only by an address): nothing was cleared, so the record stays.
+        fields["birth"] = {"date": "", "place": ""}
     for key in ("birth", "death"):
         _carry(getattr(person, key), fields.get(key))
     for key, value in fields.items():
@@ -148,8 +156,23 @@ def update_person(tree, person_id, values):
     if "events" in values:
         _store_events(person, clean_events(values["events"]))
     if "names" in values:
-        _store_list(person, "names", clean_names(values["names"]))
+        _store_list(person, "names", _carry_written(person_names(person), clean_names(values["names"])))
     _store_flags(person, values)
+
+
+def _carry_written(before, after):
+    """An other name exactly as another program wrote it ("Elena /Case/ Jr.") stays with
+    that name while its parts and type are unchanged; editing the name lets it go."""
+    written = {}  # Names alike in every part ("Elena Case Jr." and "Elena Case III") keep their order.
+    for name in before:
+        written.setdefault((name["given"], name["surname"], name["type"]), []).append(name.get("written", ""))
+    for name in after:
+        queue = written.get((name["given"], name["surname"], name["type"]))
+        if queue:
+            kept = queue.pop(0)
+            if kept and "written" not in name:
+                name["written"] = kept
+    return after
 
 
 def _store_list(person, key, items):
@@ -439,6 +462,13 @@ def unlink_partner(tree, person_id, partner_id):
     family.partners = [p for p in family.partners if p != partner_id]
     if not family.children:
         del tree.families[family.id]
+        return
+    # The family stays for the children, but the marriage, the kind of relationship and
+    # what another program's file said about the couple were theirs: a partner added later
+    # must not inherit them. Undo brings them back with the partner.
+    family.relationship = "unknown"
+    family.extra.pop("marriage", None)
+    family.extra.pop("gedcom", None)
 
 
 def link_partner(tree, person_id, other_id, relationship="married"):
@@ -733,7 +763,17 @@ def set_sources(tree, sources, merged=None, removed=()):
             fact["citations"] = moved
         else:
             fact.pop("citations")
-    kept = {k: {f: v for f, v in source.items() if v} for k, source in sources.items() if k not in removed}
+    # The window edits only the fields it shows; what else a record holds (a publication
+    # or abbreviation from another program's file) stays with it.
+    before = tree.extra.get("sources") if isinstance(tree.extra.get("sources"), dict) else {}
+    kept = {}
+    for key, source in sources.items():
+        if key in removed:
+            continue
+        old = before.get(key) if isinstance(before.get(key), dict) else {}
+        record = {f: v for f, v in old.items() if f not in SOURCE_FIELDS}
+        record.update({f: v for f, v in source.items() if v})
+        kept[key] = record
     if kept:
         tree.extra["sources"] = kept
     else:
@@ -866,7 +906,30 @@ def _combine_same_couples(tree):
         first.children.extend(family.children)
         if first.relationship == "unknown":
             first.relationship = family.relationship
+        _combine_family_details(first, family)
         del tree.families[family_id]
+
+
+def _combine_family_details(first, second):
+    """What the second record of a couple knew comes along: its marriage fills what the
+    first doesn't say (citations and witnesses of both are kept), and its other lines from
+    another program's file are kept too."""
+    theirs = second.extra.get("marriage")
+    if isinstance(theirs, dict):
+        mine = first.extra.get("marriage") if isinstance(first.extra.get("marriage"), dict) else {}
+        merged = {**theirs, **{k: v for k, v in mine.items() if v not in ("", None, [])}}
+        for key in ("citations", "people"):
+            items = list(as_list(mine.get(key))) + [i for i in as_list(theirs.get(key)) if i not in as_list(mine.get(key))]
+            if items:
+                merged[key] = items
+        first.extra["marriage"] = merged
+    for key, value in second.extra.items():
+        if key == "marriage":
+            continue
+        if key not in first.extra:
+            first.extra[key] = value
+        elif isinstance(first.extra[key], list) and isinstance(value, list):
+            first.extra[key] = first.extra[key] + [v for v in value if v not in first.extra[key]]
 
 
 def _fold_partial_families(tree):

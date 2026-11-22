@@ -1,5 +1,7 @@
 """Sending a tree out of the program: GEDCOM files, pictures and PDFs."""
+import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QMarginsF, QRectF, Qt
@@ -8,7 +10,7 @@ from PySide6.QtGui import QColor, QImage, QPageLayout, QPageSize, QPainter, QPdf
 from canvas import BACKGROUND, INK_PRINT, INK_SCREEN, build_scene
 from gedcom import write_gedcom
 from photos import resolve_photo
-from storage import atomic_write
+from storage import atomic_write, temp_beside
 from strings import t
 
 PICTURE_SCALE = 2.0
@@ -24,26 +26,30 @@ class ExportError(Exception):
 MEDIA_MARK = ".maiores-export"  # Written into an export's media folder: this program made it.
 
 
-def _ours(media):
-    """Whether an existing media folder beside the file can be replaced: one this program
-    wrote (marked, or the flat folder of files older versions wrote). Anything else is the
-    person's own, and is never deleted."""
-    if not media.exists():
-        return True
-    if not media.is_dir() or media.is_symlink():
-        return False
-    return (media / MEDIA_MARK).is_file() or all(entry.is_file() and not entry.is_symlink() for entry in media.iterdir())
+def _media_folder(path):
+    """The folder name for the file's photos: `<name>_media` if it is free or one this
+    program made (it has the mark), otherwise the first free `<name>_media-2`, -3...
+    A folder without the mark may hold anything of the person's, so it is never replaced."""
+    base = f"{path.stem}_media"
+    name, number = base, 1
+    while True:
+        folder = path.parent / name
+        if not folder.exists() and not folder.is_symlink():
+            return name
+        if folder.is_dir() and not folder.is_symlink() and (folder / MEDIA_MARK).is_file():
+            return name
+        number += 1
+        name = f"{base}-{number}"
 
 
 def export_gedcom(tree, folder, path):
     """Write a GEDCOM file, with its photos in a folder beside it. The folder is made fresh
     each time and holds only what this file refers to: a picture someone has since hidden
-    or marked private must not stay behind in it, to be sent along with the file."""
+    or marked private must not stay behind in it, to be sent along with the file.
+    If anything fails, the file and folder from before are left as they were."""
     path = Path(path)
-    media_name = f"{path.stem}_media"
+    media_name = _media_folder(path)
     media = path.parent / media_name
-    if not _ours(media):
-        raise ExportError(t("export_media_not_ours", path=media))
     copies = {}
     names = set()
 
@@ -53,37 +59,53 @@ def export_gedcom(tree, folder, path):
             return None
         if stored not in copies:
             name, number = source.name, 1
-            while name.lower() in names:  # Two files called the same in different folders.
+            while name.lower() in names or name == MEDIA_MARK:  # Two files called the same in different folders.
                 number += 1
-                name = f"{source.stem}-{number}{source.suffix}"
+                name = f"{Path(source.name).stem}-{number}{source.suffix}"
             names.add(name.lower())
             copies[stored] = (source, name)
         return f"{media_name}/{copies[stored][1]}"
 
     text = write_gedcom(tree, path, record_photo)
-    fresh = path.parent / f".{media_name}.new"
-    old = path.parent / f".{media_name}.old"
+    # One private working folder per export (a name nobody else can have chosen): only it is
+    # ever deleted. The old file and folder wait in it until the new pair is in place.
     try:
-        for leftover in (fresh, old):
-            if leftover.exists():
-                shutil.rmtree(leftover)
-        if copies:
-            fresh.mkdir()
-            for source, name in copies.values():
-                shutil.copy2(source, fresh / name)
-            (fresh / MEDIA_MARK).write_text("Made by Maiores with the GEDCOM file beside it. Replaced at each export.\n",
-                                            encoding="utf-8")
-        atomic_write(path, text)
-        if media.exists():
-            media.rename(old)
-        if copies:
-            fresh.rename(media)
-        if old.exists():
-            shutil.rmtree(old)
+        work = Path(tempfile.mkdtemp(prefix=f".{path.stem}-export-", dir=path.parent))
     except OSError as error:
         raise ExportError(str(error)) from error
-    finally:
-        shutil.rmtree(fresh, ignore_errors=True)
+    fresh, old, old_file = work / "new", work / "old", work / "old.ged"
+    moved_old = installed = False
+    had_file = path.exists()
+    try:
+        fresh.mkdir()
+        for source, name in copies.values():
+            shutil.copy2(source, fresh / name)
+        (fresh / MEDIA_MARK).write_text("Made by Maiores with the GEDCOM file beside it. Replaced at each export.\n",
+                                        encoding="utf-8")
+        if had_file:
+            shutil.copy2(path, old_file)
+        if media.exists():
+            media.rename(old)
+            moved_old = True
+        if copies:
+            fresh.rename(media)
+            installed = True
+        atomic_write(path, text)  # Last: the file only ever names a folder that is there.
+    except OSError as error:
+        try:  # Put the previous pair back: the file as well, in case it was already replaced.
+            if installed:
+                shutil.rmtree(media, ignore_errors=True)
+            if moved_old and old.exists() and not media.exists():
+                old.rename(media)
+            if had_file and old_file.exists():
+                os.replace(old_file, path)
+            elif not had_file and path.exists():
+                path.unlink()
+        except OSError:
+            pass
+        shutil.rmtree(work, ignore_errors=True)
+        raise ExportError(str(error)) from error
+    shutil.rmtree(work, ignore_errors=True)
     return len(copies)
 
 
@@ -113,7 +135,10 @@ def _export_png(tree, layout, today, photo_for, path, detail="age"):
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     scene.render(painter, QRectF(image.rect()), area)
     painter.end()
-    temp = Path(path).with_name(f".{Path(path).name}.tmp")
+    try:
+        temp = temp_beside(path)
+    except OSError as error:
+        raise ExportError(str(error)) from error
     try:
         if not image.save(str(temp), "PNG"):
             raise ExportError(t("export_failed", path=path))
@@ -127,7 +152,10 @@ def _export_png(tree, layout, today, photo_for, path, detail="age"):
 def _export_pdf(tree, layout, today, photo_for, path, detail="age"):
     """One A3 page in whichever direction suits the tree, in ink-saving colours."""
     scene, area = _prepared_scene(tree, layout, today, photo_for, INK_PRINT, detail)
-    temp = Path(path).with_name(f".{Path(path).name}.tmp")
+    try:
+        temp = temp_beside(path)
+    except OSError as error:
+        raise ExportError(str(error)) from error
     writer = QPdfWriter(str(temp))
     writer.setResolution(PDF_DPI)
     orientation = (

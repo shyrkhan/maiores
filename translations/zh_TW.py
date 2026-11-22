@@ -945,4 +945,5 @@ TEXT = {
     "import_documents_failed": "無法複製的文件：{count}。",
     "export_media_not_ours": "{path} 已存在且包含其他內容，因此無法放入照片。請用其他名稱或在其他資料夾中儲存。",
     "dna_compare_builds": "無法比較這些原始檔案：它們使用不同的參考版本（{mine} 和 {theirs}），只有版本 37 的位置可以用 cM 測量。",
+    "share_missing": "族譜引用但找不到、因此未放入副本的檔案：{count}。",
 }

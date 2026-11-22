@@ -945,4 +945,5 @@ TEXT = {
     "import_documents_failed": "コピーできなかった書類: {count}。",
     "export_media_not_ours": "{path} は既に存在し、別のものが入っているため、写真を置けません。別の名前または別のフォルダーに保存してください。",
     "dna_compare_builds": "これらの生データは比較できません。参照ビルドが異なり ({mine} と {theirs})、cM で測定できるのはビルド 37 の位置だけです。",
+    "share_missing": "家系図が参照しているが見つからず、コピーに含めなかったファイル: {count}。",
 }

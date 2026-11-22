@@ -979,4 +979,5 @@ TEXT = {
     "import_documents_failed": "Dokumenata koji se nisu mogli kopirati: {count}.",
     "export_media_not_ours": "{path} već postoji i sadrži druge stvari, pa se fotografije ne mogu staviti onamo. Spremite datoteku pod drugim imenom ili u drugu mapu.",
     "dna_compare_builds": "Ove sirove datoteke ne mogu se usporediti: koriste različite referentne verzije ({mine} i {theirs}), a u cM se mogu mjeriti samo položaji verzije 37.",
+    "share_missing": "Datoteka na koje stablo upućuje, ali nisu pronađene, pa nisu u kopiji: {count}.",
 }
