@@ -143,6 +143,8 @@ def _carry(old, new):
 def update_person(tree, person_id, values):
     fields = clean_fields(values)
     person = _person(tree, person_id)
+    if fields["notes"] == (person.notes or "").rstrip():
+        fields["notes"] = person.notes  # Imported notes may end in spaces: unchanged stays unchanged.
     old_birth = person.birth
     if fields.get("birth") is None and isinstance(old_birth, dict) and not old_birth.get("date") \
             and not old_birth.get("place"):

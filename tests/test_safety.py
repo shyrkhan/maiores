@@ -515,6 +515,18 @@ class NotesOnlyEditTests(WindowCase):
         changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
         self.assertEqual(changed, {"notes"}, (before, after))
 
+    def test_notes_ending_in_spaces_stay_as_imported(self):
+        from edits import update_person
+        from dialogs import person_to_values
+        from model import Person, Tree
+        tree = Tree({"p": Person("p", given="Robert", notes="He died in 1094. \n")}, {})
+        update_person(tree, "p", person_to_values(tree.people["p"]))
+        self.assertEqual(tree.people["p"].notes, "He died in 1094. \n")
+        values = person_to_values(tree.people["p"])
+        values["notes"] = "He died in 1095.  "
+        update_person(tree, "p", values)
+        self.assertEqual(tree.people["p"].notes, "He died in 1095.")
+
 class ThirdRoundTests(WindowCase):
     """The recheck of 22 November 2026."""
 
