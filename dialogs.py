@@ -1,4 +1,5 @@
 """The form for adding or editing a person, and the find-a-person box."""
+import copy
 from pathlib import Path
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt
@@ -28,14 +29,14 @@ from PySide6.QtWidgets import (
 
 from edits import EditError, clean_fields
 from model import (
-    EVENT_TYPES, date_input_text, fact_details, fold_text, is_period, normalize_date_input, parse_date,
+    EVENT_TYPES, date_input_text, date_sort_key, fact_details, fold_text, is_period, normalize_date_input,
     person_documents,
     person_events, person_names,
 )
 from facts_dialogs import FactContext, FactDetails, NamesDialog
 from photos import STORED_H, STORED_W, default_crop
-from screen import fit_hint, fit_to_screen
-from strings import t
+from screen import fit_hint, fit_to_screen, scrolling
+from strings import collation_key, t
 import theme
 
 SEX_OPTIONS = [("", "sex_unknown"), ("F", "sex_female"), ("M", "sex_male"), ("X", "sex_other")]
@@ -158,7 +159,7 @@ class PersonDialog(QDialog):
         events_layout.setContentsMargins(0, 0, 0, 0)
         self.events_list = QListWidget()
         self.events_list.setFixedHeight(84)
-        self.events_list.itemDoubleClicked.connect(lambda _item: self._edit_event())
+        self.events_list.itemActivated.connect(lambda _item: self._edit_event())
         buttons_row = QHBoxLayout()
         for key, handler in (("event_add", self._add_event), ("event_edit", self._edit_event),
                              ("event_remove", self._remove_event)):
@@ -231,6 +232,14 @@ class PersonDialog(QDialog):
             field.textChanged.connect(self._refresh)
         self._refresh()
         self.given.setFocus()
+        # Enter saves. Any other button ("Other names", "Add event") would otherwise become
+        # the default as soon as it was focused once, or by being first in the window.
+        save = self.buttons.button(QDialogButtonBox.StandardButton.Save)
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(button is save)
+        save.setDefault(True)
+        # What OK with nothing changed would give (a copy: events and names are edited in place).
+        self.shown = copy.deepcopy(self.values())
 
     def ask_event(self, event):
         dialog = EventDialog(self, event, self.context)
@@ -342,6 +351,10 @@ class PersonDialog(QDialog):
             values["link"] = self.link.currentData()
         if self.add_another:
             values["add_another"] = True
+        if getattr(self, "shown", None) is not None and values == self.shown:
+            # Nothing changed: OK must not rewrite what the window doesn't show (a hand-edited
+            # file's odd shapes, details from another program) or add an undo step.
+            values["unchanged"] = True
         return values
 
 
@@ -378,7 +391,7 @@ def matching_people(tree, query):
         haystack = fold_text(f"{person.given} {person.surname} {person.birth_surname} {others}")
         if all(word in haystack for word in words):
             found.append(person)
-    return sorted(found, key=lambda p: (fold_text(p.surname), fold_text(p.given), p.id))
+    return sorted(found, key=lambda p: (collation_key(p.surname), collation_key(p.given), p.id))
 
 
 class FindDialog(QDialog):
@@ -618,8 +631,12 @@ class PreferencesDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        area = scrolling(form)
+        wanted = area.widget().sizeHint()  # Measured once the form sits in its page.
+        layout.addWidget(area, 1)
         layout.addWidget(buttons)
+        bar = area.verticalScrollBar().sizeHint().width()
+        fit_to_screen(self, wanted.width() + bar + 32, wanted.height() + buttons.sizeHint().height() + 48)
 
     def values(self):
         return {
@@ -758,7 +775,7 @@ class PlacesDialog(QDialog):
         layout.addWidget(buttons)
         self.filter.textChanged.connect(lambda _text: self._fill_places())
         self.places.currentRowChanged.connect(self._show_place)
-        self.events.itemDoubleClicked.connect(self._go)
+        self.events.itemActivated.connect(self._go)
         self._fill_places()
 
     def _collect(self):
@@ -774,7 +791,7 @@ class PlacesDialog(QDialog):
     def _fill_places(self, select=None):
         self._collect()
         words = fold_text(self.filter.text()).split()
-        self.shown = [p for p in sorted(self.by_place, key=lambda p: (-len(self.by_place[p]), fold_text(p)))
+        self.shown = [p for p in sorted(self.by_place, key=lambda p: (-len(self.by_place[p]), collation_key(p)))
                       if all(w in fold_text(p) for w in words)]
         self.places.blockSignals(True)
         self.places.clear()
@@ -796,7 +813,7 @@ class PlacesDialog(QDialog):
             return
         place = self.shown[row]
         self.editor.show_place(place, self.records.get(place), list(self.by_place))
-        facts = sorted(self.by_place[place], key=lambda f: (f.date or "9999", f.kind))
+        facts = sorted(self.by_place[place], key=lambda f: date_sort_key(f.date, f.kind))
         for fact in facts:
             item = QListWidgetItem(f"{date_input_text(fact.date) or '?'}   {fact_label(self.tree, fact)}")
             item.setData(Qt.ItemDataRole.UserRole, fact.person_id)
@@ -804,24 +821,32 @@ class PlacesDialog(QDialog):
 
     def _saved(self, old, new, record):
         import edits
+        from edits import copy_tree
         from model import place_records
+        # Worked on a copy: a save that is refused must leave nothing behind, not even
+        # the rename that ran before the refusal.
+        trial = copy_tree(self.work)
         try:
-            if new != old and new in place_records(self.work):
-                # Renamed onto a place already known: the two are merged, and the form
-                # (which showed only the renamed one) adds to it rather than replacing it.
-                edits.rename_place(self.work, old, new)
-                merged = place_records(self.work).get(new, {})
-                given = {k: v for k, v in record.items() if v not in ("", None, [])}
-                record = {**merged, **given}
-                if merged.get("old_names") or given.get("old_names"):
+            records = place_records(trial)
+            if new != old and new in records:
+                # Renamed onto a place already known: the two are merged, and the one renamed
+                # onto keeps its details. The form showed the renamed place, so only what the
+                # person changed in it counts, on top of the merged record.
+                before = records.get(old, {})
+                changed = {k: v for k, v in record.items() if v not in ("", None, []) and v != before.get(k)}
+                edits.rename_place(trial, old, new)
+                merged = place_records(trial).get(new, {})
+                record = {**merged, **changed}
+                if merged.get("old_names") or changed.get("old_names"):
                     names = list(merged.get("old_names", []))
-                    record["old_names"] = names + [n for n in given.get("old_names", []) if n not in names]
+                    record["old_names"] = names + [n for n in changed.get("old_names", []) if n not in names]
             elif new != old:
-                edits.rename_place(self.work, old, new)
-            edits.set_place(self.work, new, record)
+                edits.rename_place(trial, old, new)
+            edits.set_place(trial, new, record)
         except edits.EditError as error:
             self.editor.problem.setText(str(error))
             return
+        self.work = trial
         if new != old:
             self.operations.append(("rename", old, new))
         self.operations.append(("set", new, record))
@@ -846,10 +871,8 @@ class TimelineDialog(QDialog):
         self.setWindowTitle(t("timeline_title"))
         fit_to_screen(self, 720, 560)
         self.tree, self.chosen = tree, None
-        def when(row):  # By the real date: "about 1921" belongs in 1921, not after all plain years.
-            parsed = parse_date(row.date)
-            return (parsed.year, parsed.month or 0, parsed.day or 0, row.kind)
-        self.rows = sorted((r for r in rows if year_of(r) is not None), key=when)
+        # By the real date: "about 1921" belongs in 1921, not after all plain years.
+        self.rows = sorted((r for r in rows if year_of(r) is not None), key=lambda r: date_sort_key(r.date, r.kind))
         self.filter = QLineEdit()
         self.filter.setPlaceholderText(t("timeline_filter"))
         self.list = QListWidget()
@@ -857,7 +880,7 @@ class TimelineDialog(QDialog):
         layout.addWidget(self.filter)
         layout.addWidget(self.list)
         self.filter.textChanged.connect(self._fill)
-        self.list.itemDoubleClicked.connect(self._go)
+        self.list.itemActivated.connect(self._go)
         self._fill()
 
     def _fill(self):

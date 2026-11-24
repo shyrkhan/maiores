@@ -7,9 +7,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QPushButton, QVBoxLayout,
 )
 
-from model import fold_text, person_story, person_tasks
+from model import person_story, person_tasks
 from screen import fit_to_screen
-from strings import t
+from strings import collation_key, t
 
 
 def _ok_cancel(dialog, layout):
@@ -28,7 +28,7 @@ class TasksDialog(QDialog):
         hint = QLabel(t("tasks_hint"))
         hint.setWordWrap(True)
         self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(lambda _item: self.edit())
+        self.list.itemActivated.connect(lambda _item: self.edit())
         self.list.itemChanged.connect(self._ticked)
         row = QHBoxLayout()
         for key, handler in (("list_add", self.add), ("list_edit", self.edit), ("list_remove", self.remove)):
@@ -94,6 +94,7 @@ class StoryDialog(QDialog):
         hint = QLabel(t("story_hint"))
         hint.setWordWrap(True)
         self.text = QPlainTextEdit(person_story(person))
+        self.text.setTabChangesFocus(True)  # Tab moves on, for those using the keyboard.
         self.private = QCheckBox(t("story_private"))
         self.private.setChecked(bool(person.extra.get("story_private")))
         self.private.setToolTip(t("field_private_tip"))
@@ -116,7 +117,7 @@ class ResearchDialog(QDialog):
         fit_to_screen(self, 620, 520)
         self.tree, self.chosen = tree, None
         self.rows = []
-        for person in sorted(tree.people.values(), key=lambda p: (fold_text(p.surname), fold_text(p.given))):
+        for person in sorted(tree.people.values(), key=lambda p: (collation_key(p.surname), collation_key(p.given))):
             for task in person_tasks(person):
                 self.rows.append((task["done"], person.id, f"{task['text']}   - {person.display_name}"))
         self.rows.sort(key=lambda row: row[0])
@@ -124,7 +125,7 @@ class ResearchDialog(QDialog):
         self.show_done = QCheckBox(t("research_show_done"))
         self.show_done.toggled.connect(self._fill)
         self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(self._go)
+        self.list.itemActivated.connect(self._go)
         layout = QVBoxLayout(self)
         layout.addWidget(self.intro)
         layout.addWidget(self.show_done)

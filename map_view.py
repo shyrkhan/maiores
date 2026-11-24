@@ -286,7 +286,9 @@ class MapView(QWidget):
         if (event.position() - start).manhattanLength() > 4:
             return  # A drag, not a click.
         if self.picking:
-            self.point_clicked.emit(*self.degrees_at(event.position()))
+            lat, lon = self.degrees_at(event.position())
+            # The map repeats east-west: a click on the copy past the 180th meridian is that place.
+            self.point_clicked.emit(lat, (lon + 180.0) % 360.0 - 180.0)
             return
         marker = self.marker_at(event.position())
         if marker is not None:

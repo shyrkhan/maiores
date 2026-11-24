@@ -10,6 +10,7 @@
    already follows (no loops, no person with two sets of birth parents, couples
    not related) holds here too, and a refusal names the pair that caused it.
 """
+import json
 from dataclasses import dataclass, field
 
 import edits
@@ -124,8 +125,9 @@ def suggest_matches(mine, theirs):
             score = person_score(my_person, their_person)
             if score is not None:
                 candidates.setdefault(their_id, {})[my_id] = score
-    their_relatives = {p: _relatives(theirs, p) for p in theirs.people}
-    my_relatives = {p: _relatives(mine, p) for p in mine.people}
+    with theirs.looking(), mine.looking():  # One index each, not one per person (18 s on 5,000).
+        their_relatives = {p: _relatives(theirs, p) for p in theirs.people}
+        my_relatives = {p: _relatives(mine, p) for p in mine.people}
 
     def family_bonus(their_id, my_id, assigned):
         """Relatives of theirs that look like (or were matched to) relatives of mine in the same role."""
@@ -219,6 +221,19 @@ class Result:
     joined: int
 
 
+def _take_theirs(my_person, their_copy, keys):
+    """Their version where it was chosen. Only for details that still differ from the
+    person they are matched to now: a choice made against an earlier match must not
+    overwrite the right one. Swapped, not overwritten: theirs becomes yours, and yours goes
+    to the other side, so the merge keeps it in the notes or as another name."""
+    differing = {key for key, _label, _m, _t in differences(my_person, their_copy)}
+    for key in keys:
+        if key in differing:
+            mine_value = _get(my_person, key)
+            _set(my_person, key, _get(their_copy, key))
+            _set(their_copy, key, mine_value)
+
+
 def combine(mine, theirs, matches, take_theirs=None, copy_photo=None, copy_documents=None, copy_raw=None):
     """Your tree with theirs added. `matches`: {their id: your id} for people who are the
     same; `take_theirs`: {their id: {field keys}} where their version wins; `copy_photo(their
@@ -252,35 +267,83 @@ def combine(mine, theirs, matches, take_theirs=None, copy_photo=None, copy_docum
     mine_faces = set(face_links(mine))
     _bring_faces_and_marks(trial, theirs)
     order = sorted(matches.items(), key=lambda pair: (_generation(mine, pair[1]), pair[1]))
+    # Merged without checking the whole tree each time (two checks per person: minutes on
+    # a big tree); checked once at the end. Only if that finds a problem are the merges
+    # done again one by one with checks, to name the pair that caused it.
+    before = {(issue.code, issue.detail) for issue in edits.validate(trial)}
+    quick = edits.copy_tree(trial)
+    try:
+        for their_id, my_id in order:
+            _take_theirs(quick.people[my_id], quick.people[new_ids[their_id]], take_theirs.get(their_id, ()))
+            edits.merge_people(quick, my_id, new_ids[their_id], check=False)
+        clean = not [i for i in edits.validate(quick) if (i.code, i.detail) not in before]
+    except edits.EditError:
+        clean = False
+    if clean:
+        trial = quick
+        order = []
     for their_id, my_id in order:
-        their_copy, my_person = trial.people[new_ids[their_id]], trial.people[my_id]
-        for key in take_theirs.get(their_id, ()):
-            _set(my_person, key, _get(their_copy, key))
+        _take_theirs(trial.people[my_id], trial.people[new_ids[their_id]], take_theirs.get(their_id, ()))
         try:
             edits.merge_people(trial, my_id, new_ids[their_id])
         except edits.EditError as error:
             raise CombineError(theirs.people[their_id].display_name, mine.people[my_id].display_name,
                                str(error)) from error
+    # Merged one person at a time, an event of theirs still named the next person by their
+    # new id, so it didn't look like yours yet; now that everyone is merged it is the same.
+    for my_id in set(matches.values()):
+        person = trial.people.get(my_id)
+        for key in ("events", "names", "tasks"):
+            items = person.extra.get(key) if person is not None else None
+            if isinstance(items, list):
+                person.extra[key] = [item for n, item in enumerate(items) if item not in items[:n]]
     _drop_faces_of_missing_files(trial, mine_faces)
     return Result(trial, len(theirs.people) - len(matches), len(matches))
 
 
+def _source_key(source):
+    return tuple(fold_text(source.get(field) or "").strip() for field in ("title", "author", "repository"))
+
+
+def _content_key(record):
+    return json.dumps({k: v for k, v in record.items() if v}, sort_keys=True, ensure_ascii=False) \
+        if isinstance(record, dict) else ""
+
+
 def _with_mine_ids(theirs, trial, new_ids):
     """A copy of their tree whose facts cite sources in `trial` and point at the new ids of
-    their people. Their sources come across; one with the same title as yours is yours."""
+    their people. Their sources come across; one with the same title, author and archive
+    as yours is yours. Two registers of one title from different archives stay two."""
     theirs = edits.copy_tree(theirs)
     mine_sources = trial.extra.setdefault("sources", {})
-    by_title = {fold_text(source.get("title", "")): source_id for source_id, source in tree_sources(trial).items()}
+    by_key = {_source_key(source): source_id for source_id, source in tree_sources(trial).items()}
+    raw = theirs.extra.get("sources") if isinstance(theirs.extra.get("sources"), dict) else {}
+    # A source with no title is the same as one of yours only when it says exactly the same.
+    by_content = {_content_key(record): source_id for source_id, record in mine_sources.items()
+                  if isinstance(record, dict)}
     source_map = {}
     for source_id, source in tree_sources(theirs).items():
-        key = fold_text(source["title"])
-        if key and key in by_title:
-            source_map[source_id] = by_title[key]
+        key = _source_key(source)
+        record = raw.get(source_id, source)
+        if isinstance(mine_sources.get(source_id), dict) and _content_key(mine_sources[source_id]) == _content_key(record):
+            source_map[source_id] = source_id  # Your own source, come back in a copy of your tree.
+        elif key[0] and key in by_key:
+            source_map[source_id] = by_key[key]
+            # The same source: what theirs says and yours doesn't (a note, the publication,
+            # an abbreviation) fills the gaps of yours.
+            mine = mine_sources.get(by_key[key])
+            if isinstance(mine, dict) and isinstance(record, dict):
+                for name, value in record.items():
+                    if value and not mine.get(name):
+                        mine[name] = value
+        elif not key[0] and _content_key(record) in by_content:
+            source_map[source_id] = by_content[_content_key(record)]
         else:
             source_map[source_id] = new_id("s")
-            mine_sources[source_map[source_id]] = {k: v for k, v in source.items() if v}
-            if key:
-                by_title[key] = source_map[source_id]
+            # The whole record, with what the window doesn't show (publication, abbreviation).
+            mine_sources[source_map[source_id]] = {k: v for k, v in raw.get(source_id, source).items() if v}
+            if key[0]:
+                by_key[key] = source_map[source_id]
     if not mine_sources:
         trial.extra.pop("sources", None)
     for _owner, _kind, fact in stored_facts(theirs):
@@ -301,8 +364,11 @@ def _bring_places(theirs, trial):
     mine = place_records(trial)
     by_fold = {fold_text(name): name for name in list(mine) + list(fact_places(trial))}
     renames = {}
+    mine_names = set(mine) | set(fact_places(trial))
     for name in list(place_records(theirs)) + list(fact_places(theirs)):
-        if fold_text(name) in by_fold and by_fold[fold_text(name)] != name:
+        # Respelled only when you don't have it as they wrote it: a tree holding both
+        # "trogir" and "Trogir" keeps each where it was.
+        if name not in mine_names and fold_text(name) in by_fold and by_fold[fold_text(name)] != name:
             renames[name] = by_fold[fold_text(name)]
     for _owner, _kind, fact in stored_facts(theirs):
         if fact.get("place") in renames:

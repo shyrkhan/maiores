@@ -16,9 +16,9 @@ import html
 from pathlib import Path
 
 from model import (
-    date_label, fact_details, family_marriage, fold_text, parse_date, person_events, person_names, person_story, tree_sources,
+    date_label, fact_details, family_marriage, parse_date, person_events, person_names, person_story, tree_sources,
 )
-from strings import t
+from strings import collation_key, t
 
 
 def _e(text):
@@ -28,8 +28,9 @@ def _e(text):
 class _Book:
     def __init__(self, tree, notes=True, sources=True):
         self.tree, self.with_notes, self.with_sources = tree, notes, sources
-        self.titles = {k: v["title"] for k, v in tree_sources(tree).items()}
+        self.sources = tree_sources(tree)
         self.citations = []  # Numbered source notes, in order of first use.
+        self.cited = {}  # (source id, page, quality) -> note number: two sources are never one note.
         self.numbers = {}  # person id -> entry number.
         self.places = {}  # place -> entry numbers.
 
@@ -38,15 +39,22 @@ class _Book:
             return ""
         marks = []
         for citation in fact_details(fact).get("citations", []):
-            text = self.titles.get(citation["source"]) or t("source_untitled")
-            if citation.get("page"):
-                text += f", {citation['page']}"
-            if citation.get("quality"):
-                text += f" ({t('quality_' + citation['quality'])})"
-            if text not in self.citations:
-                self.citations.append(text)
-            marks.append(str(self.citations.index(text) + 1))
+            key = (citation["source"], citation.get("page", ""), citation.get("quality", ""))
+            if key not in self.cited:
+                self.citations.append(self._source_text(*key))
+                self.cited[key] = len(self.citations)
+            marks.append(str(self.cited[key]))
         return f" <sup>[{', '.join(marks)}]</sup>" if marks else ""
+
+    def _source_text(self, source_id, page, quality):
+        """Title, author and archive, so two registers of the same name can be told apart."""
+        source = self.sources.get(source_id, {})
+        parts = [source.get("title") or t("source_untitled")]
+        parts += [source[key] for key in ("author", "repository") if source.get(key)]
+        if page:
+            parts.append(page)
+        text = ", ".join(parts)
+        return f"{text} ({t('quality_' + quality)})" if quality else text
 
     def name(self, person_id):
         person = self.tree.people.get(person_id)
@@ -92,7 +100,8 @@ class _Book:
                 label = t("fact_marriage") if family.relationship in ("married", "divorced") else t("panel_partners")
                 details = self.fact_line(label, marriage)  # "Married: 1975, Split [2]" and witnesses.
                 rest = details.partition("</b> ")[2].strip()
-                lines.append(f"<b>{_e(label)}:</b> {self.name(partner)}" + (f", {rest}" if rest else ""))
+                ended = f"; {_e(t('rel_divorced'))}" if family.relationship == "divorced" else ""
+                lines.append(f"<b>{_e(label)}:</b> {self.name(partner)}" + (f", {rest}" if rest else "") + ended)
         names = person_names(person)
         if names:
             lines.append(f"<b>{_e(t('field_other_names'))}:</b> " + "; ".join(
@@ -110,20 +119,28 @@ class _Book:
     def see(self, number, earlier):
         return f"<h3>{_e(t('report_no', n=number))}</h3><p>{_e(t('report_see', n=earlier))}</p>"
 
+    @staticmethod
+    def _index_name(person):
+        """"Surname, Given" as indexes have it; one part alone without the comma, and
+        someone with no name at all as the entry above calls them."""
+        if person.surname and person.given:
+            return f"{person.surname}, {person.given}"
+        return person.surname or person.given or person.display_name
+
     def endings(self):
         parts = []
         if self.citations:
             items = "".join(f"<li>{_e(text)}</li>" for text in self.citations)
             parts.append(f"<h2>{_e(t('field_sources'))}</h2><ol>{items}</ol>")
-        people = sorted(self.numbers, key=lambda p: (fold_text(self.tree.people[p].surname),
-                                                     fold_text(self.tree.people[p].given)))
+        people = sorted(self.numbers, key=lambda p: (collation_key(self.tree.people[p].surname),
+                                                     collation_key(self.tree.people[p].given)))
         if people:
-            rows = "".join(f"<tr><td>{_e(self.tree.people[p].surname)}, {_e(self.tree.people[p].given)}</td>"
+            rows = "".join(f"<tr><td>{_e(self._index_name(self.tree.people[p]))}</td>"
                            f"<td>{self.numbers[p]}</td></tr>" for p in people)
             parts.append(f"<h2>{_e(t('report_index_names'))}</h2><table cellpadding='2'>{rows}</table>")
         if self.places:
             rows = "".join(f"<tr><td>{_e(place)}</td><td>{', '.join(str(n) for n in sorted(numbers))}</td></tr>"
-                           for place, numbers in sorted(self.places.items(), key=lambda item: fold_text(item[0])))
+                           for place, numbers in sorted(self.places.items(), key=lambda item: collation_key(item[0])))
             parts.append(f"<h2>{_e(t('report_index_places'))}</h2><table cellpadding='2'>{rows}</table>")
         return "".join(parts)
 
@@ -151,11 +168,21 @@ def _page(title, subtitle, body):
     made = t("report_made", date=datetime.date.today().strftime("%d.%m.%Y"))
     mark = branding.small_icon_uri()
     logo = f"<img src='{mark}' width='14' height='14' alt=''> " if mark else ""
-    return (f"<html><head><meta charset='utf-8'><title>{_e(title)}</title></head><body>"
+    import strings
+    direction = "rtl" if strings.right_to_left() else "ltr"  # Arabic reads from the right.
+    if direction == "rtl":  # The index tables too: from the right edge, first column on the right.
+        body = body.replace("<table ", "<table align='right' dir='rtl' ")
+    return (f"<html lang='{_e(strings.LANGUAGE)}' dir='{direction}'><head><meta charset='utf-8'>"
+            f"<title>{_e(title)}</title></head><body dir='{direction}'>"
             f"<h1>{_e(title)}</h1><p>{_e(subtitle)}</p>{body}<p><small>{logo}{_e(made)}</small></p></body></html>")
 
 
 def ancestor_book(tree, root_id, generations=6, notes=True, sources=True):
+    with tree.looking():
+        return _ancestor_book(tree, root_id, generations, notes, sources)
+
+
+def _ancestor_book(tree, root_id, generations, notes, sources):
     book = _Book(tree, notes, sources)
     order, queue, first_seen = [], [(root_id, 1)], {}
     while queue:
@@ -186,6 +213,11 @@ def ancestor_book(tree, root_id, generations=6, notes=True, sources=True):
 
 
 def descendant_book(tree, root_id, generations=6, notes=True, sources=True):
+    with tree.looking():  # One index for the whole book, not one per person listed.
+        return _descendant_book(tree, root_id, generations, notes, sources)
+
+
+def _descendant_book(tree, root_id, generations, notes, sources):
     book = _Book(tree, notes, sources)
     order, depth = [root_id], {root_id: 1}
     index = 0
@@ -226,7 +258,7 @@ def _children(tree, person_id):
     children = []
     for family in tree.families_of(person_id):
         children += [c for c in family.child_ids if c in tree.people and c not in children]
-    return sorted(children, key=lambda c: (_born(tree, c), fold_text(tree.people[c].given)))
+    return sorted(children, key=lambda c: (_born(tree, c), collation_key(tree.people[c].given)))
 
 
 def family_sheet(tree, person_id, notes=True, sources=True):
@@ -255,7 +287,7 @@ def family_sheet(tree, person_id, notes=True, sources=True):
         children = [c for c in family.child_ids if c in tree.people]
         if children:
             body.append(f"<h3>{_e(t('panel_children'))}</h3>")
-            for child in sorted(children, key=lambda c: (_born(tree, c), fold_text(tree.people[c].given))):
+            for child in sorted(children, key=lambda c: (_born(tree, c), collation_key(tree.people[c].given))):
                 body.append(book.entry(child, book.numbers[child], 4))
     title = t("report_family_title", name=tree.people[person_id].display_name)
     return _page(title, "", "".join(body) + book.endings())
@@ -274,9 +306,25 @@ def write_document(page_html, path):
         document.addResource(QTextDocument.ResourceType.ImageResource, QUrl(MARK_NAME),
                              QImage(str(branding.SMALL_ICON)))
         page_html = page_html.replace(mark, MARK_NAME)
+    if " dir='rtl'" in page_html[:400]:
+        # Every paragraph right to left, as the page says: the writers take the document's
+        # default, not the page's attribute.
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QTextOption
+        option = QTextOption()
+        option.setTextDirection(Qt.LayoutDirection.RightToLeft)
+        document.setDefaultTextOption(option)
     document.setHtml(page_html)
+    if " dir='rtl'" in page_html[:400]:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QTextCursor
+        cursor = QTextCursor(document)
+        cursor.select(QTextCursor.SelectionType.Document)
+        block_format = cursor.blockFormat()
+        block_format.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        cursor.mergeBlockFormat(block_format)
     path = Path(path)
-    from storage import temp_beside
+    from storage import check_written, temp_beside
     temp = temp_beside(path)
     try:
         if path.suffix.lower() == ".odt":
@@ -291,6 +339,7 @@ def write_document(page_html, path):
             writer.setTitle(document.metaInformation(QTextDocument.MetaInformation.DocumentTitle))
             document.print_(writer)
             del writer  # Closes the file before it is renamed (Windows needs that).
+        check_written(temp)  # A full disk leaves a cut-off file and no error.
         temp.replace(path)
     finally:
         temp.unlink(missing_ok=True)
@@ -299,4 +348,5 @@ def write_document(page_html, path):
 
 def odt_supported():
     from PySide6.QtGui import QTextDocumentWriter
-    return b"odf" in [bytes(f) for f in QTextDocumentWriter.supportedDocumentFormats()]
+    # Qt names it "ODF" in capitals: compared without case, or ODT is never offered.
+    return b"odf" in [bytes(f).lower() for f in QTextDocumentWriter.supportedDocumentFormats()]

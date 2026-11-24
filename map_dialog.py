@@ -15,7 +15,7 @@ import edits
 from map_view import USER_AGENT, MapView
 from model import all_facts, date_input_text, fold_text, parse_date, place_coordinates, place_records
 from screen import fit_to_screen
-from strings import t
+from strings import collation_key, t
 
 DEFAULT_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 SHOW = ("all", "birth", "death", "marriage", "other")
@@ -121,7 +121,7 @@ class MapDialog(QDialog):
         self.only_focus.setEnabled(bool(name))
         self.only_focus.toggled.connect(lambda _on: self.refresh(fit=True))
         self.events = QListWidget()
-        self.events.itemDoubleClicked.connect(self._go)
+        self.events.itemActivated.connect(self._go)
         self.missing_label = QLabel()
         self.missing_label.setWordWrap(True)
         self.missing = QListWidget()
@@ -187,10 +187,16 @@ class MapDialog(QDialog):
         self.by_place = by_place
         self.view.markers = markers
         self.view.path = self._life_path(records) if self.only_focus.isChecked() else []
+        # The list beside the map follows the filter too: only the events still shown.
+        if self.view.selected in by_place:
+            self._marker_clicked(self.view.selected)
+        else:
+            self.view.selected = None
+            self.events.clear()
         if fit:
             self.view.fit([(m["lat"], m["lon"]) for m in markers])
         self.view.update()
-        self.missing_places = sorted(missing, key=fold_text)
+        self.missing_places = sorted(missing, key=collation_key)
         self.missing.clear()
         self.missing.addItems(self.missing_places)
         self.missing_label.setText(t("map_missing", count=len(self.missing_places)))

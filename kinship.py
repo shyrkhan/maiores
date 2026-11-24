@@ -29,12 +29,39 @@ class Relation:
     path: list = field(default_factory=list)  # People from A to B, for highlighting.
 
 
-def _parents(index, tree, person_id):
-    family = index.birth_family_of(person_id)
-    return [p for p in (family.partners if family else []) if p in tree.people]
+def _parents(index, tree, person_id, biological=False):
+    """The parents a relation is counted through. With `biological`, only families the
+    person was born into (for DNA: adoptive and foster parents share no DNA); otherwise
+    every family they are a child of. Brothers
+    and sisters whose parents are not known yet share a family with no parents in it:
+    that family stands in for the parents ("family:<id>"), so they are still siblings."""
+    families = _parent_families(index, person_id, biological)
+    if not families:
+        return []
+    # Adoptive and foster parents count too (they are parents, as a family is), after
+    # the birth parents, so the birth line is still the one found first.
+    known = list(dict.fromkeys(p for f in families for p in f.partners if p in tree.people))
+    return known or [f"{UNKNOWN_PARENTS}{families[0].id}"]
 
 
-def _ancestors(index, tree, start):
+UNKNOWN_PARENTS = "family:"
+
+
+def _parent_families(index, person_id, biological=False):
+    # For DNA, a link not known to be adoptive or foster may well be by birth ("unknown").
+    families = [f for f, link in index.parent_families(person_id)
+                if not biological or link not in ("adopted", "foster")]
+    return families[:1] if biological else families
+
+
+def _same_parents(index, a, b, biological):
+    """Full brothers and sisters: children of one family, or of the same two parents. An
+    adopted child and the couple's own son share the adoptive family: brothers, not half."""
+    mine, theirs = _parent_families(index, a, biological), _parent_families(index, b, biological)
+    return any(f is g or (len(f.partners) == 2 and set(f.partners) == set(g.partners)) for f in mine for g in theirs)
+
+
+def _ancestors(index, tree, start, biological=False):
     """Every ancestor with its distance and the path down to `start`."""
     found = {start: (0, [start])}
     waiting = deque([start])
@@ -43,34 +70,38 @@ def _ancestors(index, tree, start):
         depth, path = found[current]
         if depth >= MAX_DEPTH:
             continue
-        for parent in _parents(index, tree, current):
+        if current.startswith(UNKNOWN_PARENTS):
+            continue  # Parents not known: nothing further up.
+        for parent in _parents(index, tree, current, biological):
             if parent not in found:
                 found[parent] = (depth + 1, [parent] + path)
                 waiting.append(parent)
     return found
 
 
-def blood_relation(tree, a, b, index=None):
-    """The blood relation of B to A, or None when no shared ancestor is recorded."""
+def blood_relation(tree, a, b, index=None, biological=False):
+    """The blood relation of B to A, or None when no shared ancestor is recorded.
+    `biological`: through birth links only, as DNA needs; otherwise adoptive and foster
+    parents count as parents, as a family does."""
     index = index or TreeIndex(tree)
     if a == b:
         return Relation("self", path=[a])
-    mine, theirs = _ancestors(index, tree, a), _ancestors(index, tree, b)
+    mine, theirs = _ancestors(index, tree, a, biological), _ancestors(index, tree, b, biological)
     shared = [p for p in mine if p in theirs]
     if not shared:
         return None
     best = min(shared, key=lambda p: (mine[p][0] + theirs[p][0], mine[p][0]))
     up, down = mine[best][0], theirs[best][0]
-    path = list(reversed(mine[best][1])) + theirs[best][1][1:]
+    path = [p for p in list(reversed(mine[best][1])) + theirs[best][1][1:] if not p.startswith(UNKNOWN_PARENTS)]
     # Half relations: the nearest shared couple contributes only one person.
     half = False
     if up >= 1 and down >= 1:
         a_line = mine[best][1][1] if len(mine[best][1]) > 1 else a
         b_line = theirs[best][1][1] if len(theirs[best][1]) > 1 else b
-        half = set(_parents(index, tree, a_line)) != set(_parents(index, tree, b_line))
+        half = not _same_parents(index, a_line, b_line, biological)
     side = ""
-    if up >= 1:
-        first_parent = path[1]
+    first_parent = mine[best][1][-2] if up >= 1 else ""
+    if first_parent in tree.people:
         parent_sex = tree.people[first_parent].sex
         side = "father" if parent_sex == "M" else "mother" if parent_sex == "F" else ""
     return Relation("blood", up, down, half, side, tree.people[b].sex, path=path)
@@ -133,7 +164,7 @@ def _en_blood(r):
         base = _pick(sex, "uncle", "aunt", "uncle or aunt")
         return half + "great-" * (up - 2) + base
     degree, removed = min(up, down) - 1, abs(up - down)
-    text = f"{_ordinal(degree)} cousin"
+    text = f"{'half ' if r.half else ''}{_ordinal(degree)} cousin"  # Half: one shared grandparent.
     return text + (f" {_times(removed)} removed" if removed else "")
 
 
@@ -204,6 +235,8 @@ def _hr_blood(r):
         text = _pick(sex, "bratić", "sestrična", "bratić/sestrična")
     else:
         text = _pick(sex, "brat", "sestra", "brat/sestra") + f" u {degree}. koljenu"
+    if r.half:
+        text = "polu" + text  # Through one shared grandparent only.
     if removed:
         text += f", {removed} " + ("generacija" if removed >= 5 else "generacije" if removed >= 2 else "generacija") + " razlike"
     return text

@@ -105,7 +105,14 @@ class DuplicatesDialog(QDialog):
             for column, text in ((1, x), (2, y)):
                 item = QTableWidgetItem(text)
                 if x and y and fold_text(x) != fold_text(y):
-                    item.setForeground(theme.colour("warn"))  # The two records disagree here.
+                    # The two records disagree here: in colour, in bold and with a mark, so
+                    # it shows to everyone, whatever colours they can tell apart.
+                    item.setForeground(theme.colour("warn"))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                    item.setText(f"≠ {text}")
+                    item.setToolTip(t("dup_differs"))
                 self.table.setItem(line, column, item)
         lines = [t(reason) for reason in candidate.reasons]
         if candidate.blocked:

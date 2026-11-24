@@ -36,7 +36,7 @@ def plan(area, paper="A4", across=1):
 def write_poster(scene, area, path, paper="A4", across=1, label=lambda row, column: ""):
     """Draw `area` of `scene` onto one sheet, or onto tiles `across` sheets wide."""
     orientation, rows, columns = plan(area, paper, across)
-    from storage import temp_beside
+    from storage import check_written, temp_beside
     temp = temp_beside(path)
     writer = QPdfWriter(str(temp))
     writer.setResolution(DPI)
@@ -70,6 +70,7 @@ def write_poster(scene, area, path, paper="A4", across=1, label=lambda row, colu
                     _marks(painter, page, overlap, mm, label(row + 1, column + 1))
         painter.end()
         del writer  # Closes the file before it is renamed.
+        check_written(temp)  # A full disk leaves a cut-off file and no error.
         temp.replace(path)
     finally:
         if painter.isActive():

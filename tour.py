@@ -51,6 +51,11 @@ class TourOverlay(QWidget):
         self.show()
         self.raise_()
         self.go(0)
+        # The keys are the tour's too, as the clicks are: Escape skips it, Enter or the right
+        # arrow goes on, the left arrow back. Nothing reaches the chart behind it.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Where grabbing isn't allowed (Wayland):
+        self.setFocus()  # the keys still come here first.
+        self.grabKeyboard()
 
     def target(self):
         rect = self.steps[self.index][0]()
@@ -127,7 +132,21 @@ class TourOverlay(QWidget):
     def mousePressEvent(self, event):
         event.accept()  # The tour holds the window until it is finished or skipped.
 
+    def focusNextPrevChild(self, _next):
+        return True  # Tab stays with the tour: the window behind it waits.
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self.finish("skipped")
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Right, Qt.Key.Key_Space):
+            self._next()
+        elif key == Qt.Key.Key_Left and self.index > 0:
+            self.go(-1)
+        event.accept()
+
     def finish(self, outcome="skipped"):
+        self.releaseKeyboard()
         self.outcome = outcome
         self.hide()
         self.deleteLater()

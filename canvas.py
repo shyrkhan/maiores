@@ -7,6 +7,7 @@ import shiboken6
 
 from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import (
+    QContextMenuEvent,
     QImage,
     QBrush,
     QColor,
@@ -103,6 +104,24 @@ def _initials_colour(initials, tint):
     return theme.soft_colour(sum(ord(c) * (i + 3) for i, c in enumerate(initials)))
 
 
+def _luminance(colour):
+    def part(value):
+        value /= 255
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+    return 0.2126 * part(colour.red()) + 0.7152 * part(colour.green()) + 0.0722 * part(colour.blue())
+
+
+def _contrast(a, b):
+    light, dark = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+def _readable_ink(back):
+    """White or near-black letters, whichever stands out more on `back` (WCAG contrast)."""
+    white, dark = QColor("#ffffff"), QColor("#1f2328")
+    return white if _contrast(white, back) >= _contrast(dark, back) else dark
+
+
 def paint_portrait(painter, frame, pixmap, deceased, initials="", tint=None, rounded=0.0):
     """A photo cut to fit the frame; without one, the person's initials (or a silhouette)."""
     painter.save()
@@ -114,8 +133,16 @@ def paint_portrait(painter, frame, pixmap, deceased, initials="", tint=None, rou
         painter.setClipRect(frame)
     if pixmap is None and initials and DECOR.placeholder == "initials":
         back = _initials_colour(initials, tint)
+        if deceased:  # Dimmed first, so the letters are chosen for the colour they end up on.
+            back = QColor(back.red() * 165 // 255, back.green() * 165 // 255, back.blue() * 165 // 255)
+            deceased = False
+        ink = _readable_ink(back)
+        if _contrast(ink, back) < 3.0:  # A middling colour: darkened until white letters read well.
+            while _contrast(QColor("#ffffff"), back) < 3.0 and back.lightness() > 0:
+                back = back.darker(110)
+            ink = QColor("#ffffff")
         painter.fillRect(frame, back)
-        painter.setPen(QColor("#ffffff") if back.lightness() < 150 else QColor("#1f2328"))
+        painter.setPen(ink)
         painter.setFont(label_font(max(10, int(frame.height() * 0.3))))
         painter.drawText(frame, Qt.AlignmentFlag.AlignCenter, initials)
     elif pixmap is not None:
@@ -819,6 +846,12 @@ class TreeView(QGraphicsView):
             self.on_click(item.person_id if item else None)
 
     def keyPressEvent(self, event):
+        # Shift with an arrow folds the selected person's branch, as the fold buttons do:
+        # the keyboard reaches everything the mouse does.
+        if event.modifiers() == Qt.KeyboardModifier.ShiftModifier and getattr(self, "on_fold_key", None) \
+                and self.on_fold_key(event.key()):
+            event.accept()
+            return
         # Arrow keys move between people; anything else keeps its usual meaning.
         if self.on_key is not None and self.on_key(event.key()):
             event.accept()
@@ -847,7 +880,12 @@ class TreeView(QGraphicsView):
 
     @staticmethod
     def dropped_file(mime):
-        """A picture (it becomes the portrait) or a document file (it is attached)."""
+        """A picture (it becomes the portrait) or a document file (it is attached). Several
+        files at once are a list of paths: all are attached (none becomes the portrait)."""
+        files = [url.toLocalFile() for url in mime.urls() if url.toLocalFile()]
+        if len(files) > 1 and any(Path(f).suffix.lower() in PICTURE_SUFFIXES or documents.is_allowed(f)
+                                  for f in files):
+            return files
         picture = TreeView.dropped_picture(mime)
         if picture is not None:
             return picture
@@ -908,6 +946,11 @@ class TreeView(QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
     def contextMenuEvent(self, event):
+        if event.reason() == QContextMenuEvent.Reason.Keyboard:
+            # The Menu key or Shift+F10: the selected person's menu, at their card.
+            self.on_context(None, None)
+            event.accept()
+            return
         item = self.person_at(event.pos())
         if item is not None:
             self.on_context(item.person_id, event.globalPos())

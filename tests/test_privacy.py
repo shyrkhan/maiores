@@ -177,7 +177,7 @@ class DocumentTests(unittest.TestCase):
         result = read_gedcom(out / "family.ged", TODAY)
         person_id = next(iter(result.tree.people))
         self.assertNotIn(person_id, result.photos)  # A document never becomes the portrait.
-        [(path, title, kind, date)] = result.documents[person_id]
+        [(path, title, kind, date, *_ref)] = result.documents[person_id]
         self.assertEqual((path.read_bytes(), title, kind, date), (b"will", "The will", "", ""))
 
     def test_a_documents_date_and_kind_survive_gedcom(self):
@@ -190,7 +190,7 @@ class DocumentTests(unittest.TestCase):
         from exports import export_gedcom
         export_gedcom(tree, self.tree_folder, out / "family.ged")
         result = read_gedcom(out / "family.ged", TODAY)
-        [(_path, title, kind, date)] = next(iter(result.documents.values()))
+        [(_path, title, kind, date, *_ref)] = next(iter(result.documents.values()))
         self.assertEqual((title, kind, date), ("Letter", "letter", "1910-03-15"))
 
     def test_a_new_export_leaves_no_old_media_behind(self):

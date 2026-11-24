@@ -4,19 +4,25 @@ Each function checks first and only then changes the tree, so a refused edit
 leaves everything as it was. Valid input keeps validate(tree) free of problems.
 """
 import copy
+import re
 
 from model import (
     as_list,
+    kept_line_lists,
     CHILD_LINKS,
     EVENT_TYPES,
     NAME_TYPES,
     SOURCE_FIELDS,
     person_names,
+    person_events,
+    date_input_text,
+    family_marriage,
     RELATIONSHIPS,
     Family,
     Person,
     Tree,
     couples_related_by_descent,
+    died_before_born,
     face_links,
     fact_details,
     fold_text,
@@ -40,13 +46,23 @@ class EditError(ValueError):
     """The edit is not possible. The message is meant for the user."""
 
 
-def clean_fields(values):
+def typed_date(text, previous=()):
+    """What was typed, in stored form (None: not understood). A date left exactly as the
+    window showed it keeps its stored form: "from 1700 to 1710 (Julian)" is shown the same
+    whether one end or both are Julian, and must not change on a notes-only edit."""
+    for stored in previous:
+        if stored and text.strip() == date_input_text(stored):
+            return stored
+    return normalize_date_input(text)
+
+
+def clean_fields(values, person=None):
     """Turn form values into stored fields, or raise EditError with the reason."""
     fields = {key: values.get(key, "").strip() for key in PERSON_TEXT_FIELDS}
     fields["notes"] = values.get("notes", "").rstrip()
 
-    birth = normalize_date_input(values.get("birth_date", ""))
-    death = normalize_date_input(values.get("death_date", ""))
+    birth = typed_date(values.get("birth_date", ""), [person.birth_date] if person else ())
+    death = typed_date(values.get("death_date", ""), [person.death_date] if person else ())
     if is_period(birth) or is_period(death):
         raise EditError(t("error_period_not_here"))
     if birth is None:
@@ -69,10 +85,8 @@ def clean_fields(values):
     if has_death and living == "unknown":
         living = "no"
 
-    parsed_birth, parsed_death = parse_date(birth), parse_date(death)
-    if parsed_birth and parsed_death:
-        if (parsed_death.end_year or parsed_death.year) < parsed_birth.year:
-            raise EditError(t("error_death_before_birth"))
+    if died_before_born(birth, death):
+        raise EditError(t("error_death_before_birth"))
 
     fields["birth"] = {"date": birth, "place": birth_place} if birth or birth_place else None
     fields["death"] = death_event
@@ -94,13 +108,28 @@ def make_person(values):
     return person
 
 
-def clean_events(events):
-    """Life events as entered, in stored form; raises EditError for a date not understood."""
+def _unclaimed(previous, kind, text):
+    """The stored date an unchanged row came from: the first earlier entry of the same kind
+    shown as this text, taken only once. A new row typed to look like an old one gets what
+    was typed, not the old one's stored form. `previous`: [(kind, stored date)], used up
+    as rows claim them (plain stored dates, with no kind, are still accepted)."""
+    for index, entry in enumerate(previous):
+        entry_kind, stored = entry if isinstance(entry, tuple) else (kind, entry)
+        if entry_kind == kind and stored and text.strip() == date_input_text(stored):
+            if isinstance(previous, list):
+                del previous[index]
+            return [stored]
+    return []
+
+
+def clean_events(events, previous=()):
+    """Life events as entered, in stored form; raises EditError for a date not understood.
+    `previous`: the stored dates before, kept for a date left as it was shown."""
     clean = []
     for event in events or []:
         if event.get("type") not in EVENT_TYPES:
             raise EditError(t("error_bad_choice"))
-        date = normalize_date_input(event.get("date", ""))
+        date = typed_date(event.get("date", ""), _unclaimed(previous, event["type"], event.get("date", "")))
         if date is None:
             raise EditError(t("error_event_date", what=t(f"event_{event['type']}")))
         entry = {"type": event["type"], "date": date}
@@ -111,14 +140,14 @@ def clean_events(events):
     return clean
 
 
-def clean_names(names):
+def clean_names(names, previous=()):
     """Other names as entered; raises EditError for a date not understood."""
     clean = []
     for item in names or []:
         given, surname = item.get("given", "").strip(), item.get("surname", "").strip()
         if not given and not surname:
             continue
-        date = normalize_date_input(item.get("date", ""))
+        date = typed_date(item.get("date", ""), _unclaimed(previous, item.get("type"), item.get("date", "")))
         if date is None:
             raise EditError(t("error_event_date", what=t("field_other_names")))
         entry = {"given": given, "surname": surname,
@@ -131,18 +160,28 @@ def clean_names(names):
 
 # What a birth, death or marriage can carry from another program's file, which the
 # editing windows do not show: kept through an edit (see FACT_EXTRAS in model.py).
-CARRIED = ("age", "address", "cause", "label", "tag", "text", "text_on")
+CARRIED = ("age", "address", "cause", "label", "tag", "text", "text_on", "ref")
+
+
+_WINDOW_KEYS = {"date", "place", "citations", "people"}  # What the edit windows show and may clear.
 
 
 def _carry(old, new):
+    """What a birth, death or marriage held that the window doesn't show stays: the
+    cause, age or address from another program's file, and keys this version doesn't
+    know (a newer version's, or a hand-edited file's "time")."""
     if isinstance(old, dict) and isinstance(new, dict):
-        new.update({k: old[k] for k in CARRIED if k in old and k not in new})
+        new.update({k: v for k, v in old.items() if k not in new and k not in _WINDOW_KEYS})
     return new
 
 
 def update_person(tree, person_id, values):
-    fields = clean_fields(values)
     person = _person(tree, person_id)
+    fields = clean_fields(values, person)
+    if person.extra.get("hidden") and any(fields.get(k) for k in ("given", "birth_surname", "birth", "death", "notes")):
+        # Someone a shared copy hid, now given a name or a date here: they are known again,
+        # and shown as typed, not as "Šimić (living)".
+        person.extra.pop("hidden")
     if fields["notes"] == (person.notes or "").rstrip():
         fields["notes"] = person.notes  # Imported notes may end in spaces: unchanged stays unchanged.
     old_birth = person.birth
@@ -156,9 +195,10 @@ def update_person(tree, person_id, values):
     for key, value in fields.items():
         setattr(person, key, value)
     if "events" in values:
-        _store_events(person, clean_events(values["events"]))
+        _store_events(person, clean_events(values["events"], [(e["type"], e["date"]) for e in person_events(person)]))
     if "names" in values:
-        _store_list(person, "names", _carry_written(person_names(person), clean_names(values["names"])))
+        _store_list(person, "names", _carry_written(
+            person_names(person), clean_names(values["names"], [(n["type"], n["date"]) for n in person_names(person)])))
     _store_flags(person, values)
 
 
@@ -206,7 +246,7 @@ def set_marriage(tree, family_id, date="", place="", citations=None, people=None
     family = tree.families.get(family_id)
     if family is None:
         raise EditError(t("error_bad_choice"))
-    stored = normalize_date_input(date)
+    stored = typed_date(date, [family_marriage(family).get("date", "")])
     if is_period(stored):
         raise EditError(t("error_period_not_here"))
     if stored is None:
@@ -465,9 +505,13 @@ def unlink_partner(tree, person_id, partner_id):
     if not family.children:
         del tree.families[family.id]
         return
-    # The family stays for the children, but the marriage, the kind of relationship and
-    # what another program's file said about the couple were theirs: a partner added later
-    # must not inherit them. Undo brings them back with the partner.
+    _end_couple(family)
+
+
+def _end_couple(family):
+    """A family left with one partner stays for the children, but the marriage, the kind
+    of relationship and what another program's file said about the couple were theirs: a
+    partner added later must not inherit them. Undo brings them back with the partner."""
     family.relationship = "unknown"
     family.extra.pop("marriage", None)
     family.extra.pop("gedcom", None)
@@ -564,6 +608,8 @@ def link_parent(tree, child_id, parent_id, link="birth"):
     for sibling in family.child_ids:
         _refuse_loop(tree, parent_id, sibling)
     family.partners.append(parent_id)
+    # The two may already be a couple with children of their own: one family, not two.
+    _combine_same_couples(tree)
 
 
 def possible_duplicates(tree, values, exclude=()):
@@ -667,17 +713,31 @@ def _union(first, second):
     return together
 
 
+def _add_note_lines(person, lines):
+    """Add lines to someone's notes, each only once: combining the same tree again must
+    not write the same differences twice."""
+    present = set(person.notes.splitlines())
+    new = [line for line in dict.fromkeys(lines) if line and line not in present]
+    if new:
+        person.notes = "\n".join([person.notes] + new if person.notes else new)
+
+
 def _merge_details(keep, remove):
     """Fill gaps in keep from remove. Differing dates and places are kept in the notes;
     a different name becomes one of keep's other names; citations, the people at events,
     life events, other names and documents are combined."""
     if remove.extra.get("hidden"):
         return  # A person a shared copy hid carries no details, only guesses ("living").
+    if keep.extra.get("hidden"):
+        # The one kept was only a placeholder from a shared copy: the real person replaces
+        # it, and is no longer hidden.
+        keep.extra.pop("hidden")
+        keep.living = remove.living
     extras = []
 
     def compare(label, kept, other):
         if other and kept != other:
-            extras.append(f"{label}: {other}")
+            extras.append(f"{label} {other}")
 
     for field_name in ("given", "surname", "birth_surname", "sex", "photo"):
         if not getattr(keep, field_name):
@@ -688,7 +748,13 @@ def _merge_details(keep, remove):
     if (remove.given or remove.surname) and fold_text(remove.display_name) != fold_text(keep.display_name) \
             and fold_text(f"{remove.given} {remove.surname}") not in known:  # "Radic" for "Radić" is no news.
         names.append(other_name)
-    for name, label in (("birth", t("panel_born")), ("death", t("panel_died"))):
+    if keep.birth_surname and remove.birth_surname and fold_text(keep.birth_surname) != fold_text(remove.birth_surname) \
+            and fold_text(f"{remove.given} {remove.birth_surname}") not in known:
+        # "Kovačević" against "Kovač": the other birth surname is kept as a birth name.
+        names.append({"given": remove.given or keep.given, "surname": remove.birth_surname, "type": "birth"})
+    # The genealogists' signs, not words: the notes are saved, and must read the same
+    # whatever language the program runs in.
+    for name, label in (("birth", "*"), ("death", "†")):
         kept_event, other_event = getattr(keep, name) or {}, getattr(remove, name) or {}
         if not kept_event and not other_event and getattr(keep, name) is None and getattr(remove, name) is None:
             continue
@@ -708,8 +774,23 @@ def _merge_details(keep, remove):
                 merged[key] = kept_event.get(key, other_event.get(key))
         setattr(keep, name, merged)
     # DNA tests and lines kept from another program's file belong to the one person now.
-    tests = [t for t in as_list((keep.extra.get("dna") or {}).get("tests"))] + \
-        [t for t in as_list((remove.extra.get("dna") or {}).get("tests"))]
+    tests = []
+    for test in [t for t in as_list((keep.extra.get("dna") or {}).get("tests"))] + \
+            [t for t in as_list((remove.extra.get("dna") or {}).get("tests"))]:
+        same = next((t for t in tests if isinstance(t, dict) and isinstance(test, dict)
+                     and test.get("id") and t.get("id") == test.get("id")), None)
+        if same is None:
+            tests.append(test)
+            continue
+        # The same test twice (a relative's copy of your own tree): one test, its matches
+        # and segments once each.
+        for key in ("matches", "segments"):
+            mine = as_list(same.get(key))
+            known = {item.get("id") for item in mine if isinstance(item, dict) and item.get("id")}
+            extra = [item for item in as_list(test.get(key)) if item not in mine
+                     and not (isinstance(item, dict) and item.get("id") and item["id"] in known)]
+            if mine or extra:
+                same[key] = list(mine) + extra
     if tests:
         keep.extra["dna"] = {"tests": tests}
     kept_lines = as_list(keep.extra.get("gedcom")) + as_list(remove.extra.get("gedcom"))
@@ -721,14 +802,20 @@ def _merge_details(keep, remove):
         keep.living = "no"
     if keep.living == "no" and keep.death is None:
         keep.death = {"date": "", "place": ""}
-    notes = [keep.notes, remove.notes if remove.notes != keep.notes else ""] + extras
-    keep.notes = "\n".join(part for part in notes if part)
+    # Their notes once: combining the same relative's tree again finds them already there.
+    if remove.notes.strip() and not set(remove.notes.strip().splitlines()) <= set(keep.notes.splitlines()):
+        keep.notes = "\n".join(part for part in (keep.notes, remove.notes) if part)
+    _add_note_lines(keep, extras)
     events = _union(keep.extra.get("events"), remove.extra.get("events"))
     tasks = _union(keep.extra.get("tasks"), remove.extra.get("tasks"))
     stories = [s for s in (keep.extra.get("story"), remove.extra.get("story")) if isinstance(s, str) and s.strip()]
     story = "\n\n".join(dict.fromkeys(stories))  # Both written down, once each.
     documents = [dict(d) if isinstance(d, dict) else d for d in as_list(keep.extra.get("documents"))]
-    for document in as_list(remove.extra.get("documents")):
+    other_documents = as_list(remove.extra.get("documents"))
+    if remove.photo and remove.photo != keep.photo:
+        # Both had a portrait: the other one stays with the kept person, among the photos.
+        other_documents = other_documents + [{"file": remove.photo, "title": "", "kind": "photo"}]
+    for document in other_documents:
         if not isinstance(document, dict):
             continue
         same = next((d for d in documents if isinstance(d, dict) and d.get("file") == document.get("file")), None)
@@ -765,6 +852,10 @@ def set_sources(tree, sources, merged=None, removed=()):
             fact["citations"] = moved
         else:
             fact.pop("citations")
+    if merged:  # Citations kept as written from another program's file move across too.
+        for lines in kept_line_lists(tree):
+            lines[:] = [re.sub(r"@ft:s:([^@]+)@", lambda m: f"@ft:s:{merged.get(m[1], m[1])}@", line)
+                        if isinstance(line, str) else line for line in lines]
     # The window edits only the fields it shows; what else a record holds (a publication
     # or abbreviation from another program's file) stays with it.
     before = tree.extra.get("sources") if isinstance(tree.extra.get("sources"), dict) else {}
@@ -827,6 +918,9 @@ def rename_place(tree, old, new):
     if moved is not None:
         target = records.get(new, {})
         merged = {**moved, **target}
+        notes = [n for n in dict.fromkeys((target.get("note"), moved.get("note"))) if n]
+        if len(notes) > 1:
+            merged["note"] = "\n".join(notes)  # Both were written down; neither is lost.
         merged["old_names"] = _union(target.get("old_names"), moved.get("old_names"))
         if not merged["old_names"]:
             merged.pop("old_names")
@@ -906,9 +1000,12 @@ def _combine_same_couples(tree):
             continue
         first = seen[key]
         first.children.extend(family.children)
-        if first.relationship == "unknown":
-            first.relationship = family.relationship
-        _combine_family_details(first, family)
+        if first.relationship == "unknown" or (first.relationship == "married" and family.relationship == "divorced"):
+            first.relationship = family.relationship  # A divorce says the marriage ended: it wins.
+        differing = _combine_family_details(first, family)
+        person = tree.people.get(first.partners[0])
+        if person is not None:  # A couple has no notes of its own: the first partner's.
+            _add_note_lines(person, differing)
         del tree.families[family_id]
 
 
@@ -916,9 +1013,13 @@ def _combine_family_details(first, second):
     """What the second record of a couple knew comes along: its marriage fills what the
     first doesn't say (citations and witnesses of both are kept), and its other lines from
     another program's file are kept too."""
+    differing = []
     theirs = second.extra.get("marriage")
     if isinstance(theirs, dict):
         mine = first.extra.get("marriage") if isinstance(first.extra.get("marriage"), dict) else {}
+        for part in ("date", "place"):
+            if mine.get(part) and theirs.get(part) and mine[part] != theirs[part]:
+                differing.append(f"⚭ {theirs[part]}")  # The other record's wedding: kept, not lost.
         merged = {**theirs, **{k: v for k, v in mine.items() if v not in ("", None, [])}}
         for key in ("citations", "people"):
             items = list(as_list(mine.get(key))) + [i for i in as_list(theirs.get(key)) if i not in as_list(mine.get(key))]
@@ -932,18 +1033,27 @@ def _combine_family_details(first, second):
             first.extra[key] = value
         elif isinstance(first.extra[key], list) and isinstance(value, list):
             first.extra[key] = first.extra[key] + [v for v in value if v not in first.extra[key]]
+    return differing
 
 
 def _fold_partial_families(tree):
     """A child recorded with one parent in one family and with both parents in another
     (one tree knew only the father) is in the second family only. Other children of the
-    one-parent family stay where they are: their other parent is still unknown."""
+    one-parent family stay where they are: their other parent is still unknown. Brothers
+    and sisters recorded with no parent at all come along: those parents are theirs too."""
     changed = True
     while changed:
         changed = False
-        for child_id in {c["person"] for f in tree.families.values() for c in f.children}:
-            entries = [(f, c.get("link", "birth")) for f in tree.families.values()
-                       for c in f.children if c["person"] == child_id]
+        # Who is a child in which families, found once per pass (not by searching every
+        # family for every child: that took 38 s for one combine on 5,000 people). Only a
+        # child in two or more families can need folding.
+        child_of = {}
+        for family in tree.families.values():
+            for entry in family.children:
+                child_of.setdefault(entry["person"], []).append((family, entry.get("link", "birth")))
+        for child_id, entries in child_of.items():
+            if len(entries) < 2:
+                continue
             for small, link in entries:
                 twin = next((f for f, other_link in entries if f is not small and other_link == link
                              and len(small.partners) < 2 and set(small.partners) == set(f.partners)), None)
@@ -960,7 +1070,17 @@ def _fold_partial_families(tree):
                                and len(small.partners) < len(f.partners)), None)
                 if bigger is None:
                     continue
-                small.children = [c for c in small.children if c["person"] != child_id]
+                if not small.partners:
+                    # Brothers and sisters with no parent known: they are one group, and
+                    # the parents found for one are theirs too, as linking a parent does.
+                    with_parents = {c["person"] for f in tree.families.values() if f.partners
+                                    for c in f.children}
+                    joining = [c for c in small.children if c["person"] == child_id
+                               or c["person"] not in with_parents]
+                    bigger.children = _unique_children(bigger.children + joining)
+                    small.children = [c for c in small.children if c not in joining]
+                else:
+                    small.children = [c for c in small.children if c["person"] != child_id]
                 keeps_parent_link = bool(small.partners and small.children)
                 if not (keeps_parent_link or len(small.partners) == 2 or len(small.children) >= 2):
                     del tree.families[small.id]
@@ -980,8 +1100,10 @@ def _unique_children(children):
     return list(best.values())
 
 
-def merge_people(tree, keep_id, remove_id):
-    """Treat two records as one person. Refused if it would make the data contradict itself."""
+def merge_people(tree, keep_id, remove_id, check=True):
+    """Treat two records as one person. Refused if it would make the data contradict itself.
+    `check=False` (Combine, many merges in a row): the whole tree is checked once by the
+    caller at the end, not twice per merge; the quick refusals below still apply."""
     keep = _person(tree, keep_id)
     _person(tree, remove_id)
     if keep_id == remove_id:
@@ -991,7 +1113,7 @@ def merge_people(tree, keep_id, remove_id):
     if is_ancestor(tree, keep_id, remove_id) or is_ancestor(tree, remove_id, keep_id):
         raise EditError(t("error_merge_ancestor"))
 
-    trial = copy_tree(tree)
+    trial = copy_tree(tree) if check else tree
     _merge_details(trial.people[keep_id], trial.people[remove_id])
     del trial.people[remove_id]
     replace_person_references(trial, remove_id, keep_id)
@@ -1004,7 +1126,19 @@ def merge_people(tree, keep_id, remove_id):
     for family in trial.families.values():
         family.children = _unique_children(family.children)
     _fold_partial_families(trial)
+    for family_id, family in list(trial.families.items()):
+        # A family of the merged person that no longer connects anyone (two brothers with
+        # no parents, now one person) goes, as it does when someone is deleted.
+        if keep_id in family.partners + family.child_ids and not (
+                (family.partners and family.children) or len(family.partners) == 2 or len(family.children) >= 2):
+            del trial.families[family_id]
+    for test in as_list((trial.people[keep_id].extra.get("dna") or {}).get("tests")):
+        for match in as_list(test.get("matches") if isinstance(test, dict) else None):
+            if isinstance(match, dict) and match.get("person") == keep_id:
+                match.pop("person")  # Your own match was you: the link goes, the match stays.
 
+    if not check:
+        return keep
     before = {(issue.code, issue.detail) for issue in validate(tree)}
     new_problems = [i for i in validate(trial) if (i.code, i.detail) not in before]
     if any(i.code == "two_birth_families" for i in new_problems):
@@ -1044,11 +1178,17 @@ def make_head(tree, person_id, partner_id):
 
 def delete_person(tree, person_id):
     """Remove someone, and any family that no longer connects anybody."""
-    name = _person(tree, person_id).display_name
+    person = _person(tree, person_id)
+    # Saved data never holds translated words: an unnamed person leaves no written name
+    # ("Unknown" would be stored in whatever language the program runs in), and the
+    # name is the one recorded, not the one a display setting picks.
+    name = "" if person.extra.get("hidden") else " ".join(p for p in (person.given, person.surname) if p)
     del tree.people[person_id]
     replace_person_references(tree, person_id, name=name)  # A godparent stays, as a written name.
     for family_id, family in list(tree.families.items()):
-        family.partners = [p for p in family.partners if p != person_id]
+        if person_id in family.partners:
+            family.partners = [p for p in family.partners if p != person_id]
+            _end_couple(family)  # Deleting a partner ends the couple, as removing one does.
         family.children = [c for c in family.children if c["person"] != person_id]
         connected = len(family.partners) + len(family.children)
         keeps_parent_link = bool(family.partners and family.children)

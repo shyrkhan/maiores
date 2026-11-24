@@ -7,6 +7,7 @@
 """
 import argparse
 import collections
+import copy
 import datetime
 import importlib
 import os
@@ -23,13 +24,14 @@ from PySide6.QtCore import (
     QSize, QTimer, QTranslator, QUrl,
 )
 from PySide6.QtGui import (
-    QAction, QDesktopServices, QFontDatabase, QIcon, QImage, QKeySequence, QShortcut,
+    QAction, QDesktopServices, QFontDatabase, QIcon, QImage, QImageReader, QKeySequence, QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
     QFrame,
+    QGraphicsScene,
     QGridLayout,
     QHBoxLayout,
     QComboBox,
@@ -102,10 +104,12 @@ from panel import PersonPanel
 from photos import PhotoCache, PhotoError, import_photo, read_image, resolve_photo, store_photo
 from sample import sample_tree
 from storage import (
+    BACKUP_DIR,
     TREE_FILE,
     DamagedTreeError,
     TreeLoadError,
     create_tree,
+    has_tree,
     list_backups,
     make_backup,
     open_tree,
@@ -137,10 +141,10 @@ from duplicates_dialog import DuplicatesDialog
 from facts_dialogs import FactContext, SourcesDialog, UnsourcedDialog
 from reports_dialog import PosterDialog, ReportDialog
 from research_dialogs import ResearchDialog, StoryDialog, TasksDialog
-from views_dialogs import GalleryDialog, LifelinesDialog, StatisticsDialog
+from views_dialogs import GalleryDialog, LifelinesDialog, StatisticsDialog, statistics
 from webshare_dialog import LiveShareDialog, WebPageDialog
 from screen import fit_to_screen
-from strings import t
+from strings import collation_key, t
 from version import VERSION
 
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -183,9 +187,14 @@ PAGE_START, PAGE_EMPTY, PAGE_TREE = 0, 1, 2
 
 
 def tree_folder_from(path):
-    """Accept either the tree folder or the tree.json inside it."""
+    """Accept the tree folder, the tree.json inside it, or any file inside a .tree folder
+    (with tree.json gone, File > Open can still reach the tree through its backups)."""
     path = Path(path)
-    return path.parent if path.name == TREE_FILE else path
+    if path.name == TREE_FILE and path.parent.parent.name != BACKUP_DIR:
+        return path.parent
+    if path.suffix != TREE_SUFFIX:
+        return next((p for p in path.parents if p.suffix == TREE_SUFFIX), path)
+    return path
 
 
 def default_trees_folder():
@@ -238,6 +247,8 @@ def centre_page(text, buttons):
 class MainWindow(QMainWindow):
     def __init__(self, settings=None, today=None):
         super().__init__()
+        import a11y
+        a11y.install(QApplication.instance())  # Screen-reader names for every window as it opens.
         self.settings = settings
         self.today = today or datetime.date.today()
         self.tree = None
@@ -248,7 +259,7 @@ class MainWindow(QMainWindow):
         self.chart = "family"  # Which chart: family, pyramid, pedigree, bowtie or fan (see CHARTS).
         self.generations_up = hl.FAMILY_GENERATIONS_UP
         stored = settings.value(CARD_STYLE_KEY) if settings is not None else None
-        self.card_style = stored if stored in hl.STYLES else "portrait"
+        self.card_style = stored if isinstance(stored, str) and stored in hl.STYLES else "portrait"
         self.detail_mode = self._setting(DETAIL_KEY, "age", ("age", "years"))
         self.reopen_last = self._setting(REOPEN_KEY, "true", ("true", "false")) == "true"
         try:
@@ -272,6 +283,7 @@ class MainWindow(QMainWindow):
         self.save_error = None
         self.add_button_items = []
         self.path_ids = set()  # People on a highlighted relationship path.
+        self._left_out = []  # Files Combine could not bring across (see combine_with).
         self.auto_tour = False  # main() turns this on: the real program offers the tour once.
         self.tour = None
         self.trees_folder = default_trees_folder()  # Where the start page looks for trees.
@@ -281,8 +293,10 @@ class MainWindow(QMainWindow):
         self.view = TreeView(
             self._clicked, self._double_clicked, self._context_menu, self.run_action, self._arrow_key
         )
+        self.view.setAccessibleName(t("menu_chart").replace("&", ""))  # For screen readers.
         self.view.on_connect = self.connect_by_drag
         self.view.on_fold = self.toggle_fold
+        self.view.on_fold_key = self._fold_key
         self.view.on_photo = self.photo_dropped
         self.panel = PersonPanel(self.go_to_person, self.run_action)
         self.panel.today = self.today
@@ -315,6 +329,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(tree_page)
         self.setCentralWidget(self.pages)
         self._build_menus()
+        unique_accelerators(self.menuBar())
         self._build_toolbar()
         self.count_label = QLabel()
         self.statusBar().addPermanentWidget(self.count_label)
@@ -516,13 +531,16 @@ class MainWindow(QMainWindow):
             self.person_menu.addAction(t("menu_person_none")).setEnabled(False)
             return
         person_id = self.selected
-        title = self.person_menu.addAction(self.tree.people[person_id].display_name)
+        # The name as written ("Ana & Ivo" stays so): a heading, with no access letter.
+        title = self.person_menu.addAction(self.tree.people[person_id].display_name.replace("&", "&&"))
         title.setEnabled(False)
+        title.setProperty("no_accelerator", True)
         self.person_menu.addSeparator()
         for key, label, enabled in self.person_actions(person_id):
             action = self.person_menu.addAction(label)
             action.setEnabled(enabled)
             action.triggered.connect(lambda _checked=False, k=key: self.run_action(k, person_id))
+        unique_accelerators(self.person_menu)
 
     def _toggle_panel(self):
         self.panel_enabled = self.panel_action.isChecked()
@@ -548,16 +566,7 @@ class MainWindow(QMainWindow):
         self.folder = None
         self.editable = False
         self.house = None
-        self.selected = None
-        self.nav_history.clear()
-        self.collapsed.clear()
-        self.folded_up.clear()
-        self.side_folded.clear()
-        self.family_line, self.line_only_from = None, None  # A new tree: no line highlighted.
-        self.line_bar.hide()
-        self.line_only.blockSignals(True)
-        self.line_only.setChecked(False)
-        self.line_only.blockSignals(False)
+        self._forget_view_state()
         self.history.clear()
         self.photos.clear()
         self.panel.hide()
@@ -582,8 +591,8 @@ class MainWindow(QMainWindow):
         tree = self.tree
         living = sum(1 for p in tree.people.values() if p.living == "yes")
         deceased = sum(1 for p in tree.people.values() if p.living == "no")
-        surnames = collections.Counter(p.surname for p in tree.people.values() if p.surname)
-        common = ", ".join(f"{name} ({count})" for name, count in surnames.most_common(5)) or "-"
+        # Counted as the Surnames tab counts them, so the two never disagree.
+        common = ", ".join(f"{name} ({count})" for name, count in statistics(tree, self.today)["surnames"][:5]) or "-"
         depth = {}
 
         def generations(person_id, seen=()):
@@ -594,7 +603,8 @@ class MainWindow(QMainWindow):
             depth[person_id] = 1 + max((generations(p, seen + (person_id,)) for p in parents), default=0)
             return depth[person_id]
 
-        deepest = max(generations(p) for p in tree.people)
+        with tree.looking():  # One index for all, not one per person (281 s on 20,000 people).
+            deepest = max(generations(p) for p in tree.people)
         summary = t("statistics_text", people=len(tree.people), living=living, deceased=deceased,
                     unknown=len(tree.people) - living - deceased, families=len(tree.families),
                     generations=deepest, surnames=common)
@@ -645,14 +655,17 @@ class MainWindow(QMainWindow):
 
     def ask_dna(self, person_id):
         from dna_dialog import DnaDialog
-        sides = {pid: colour.name() for pid, colour in family_sides(self.tree, person_id).items()}
+        with self.tree.looking():
+            sides = {pid: colour.name() for pid, colour in family_sides(self.tree, person_id).items()}
         dialog = DnaDialog(self, self.tree, person_id, self.folder,
                            find_person=lambda title: self.ask_existing_person(title, {person_id}),
                            side_colours=sides, ask_file=self.ask_open_file)
         if not self.editable:  # The sample, or a tree open elsewhere: look, don't change.
             dialog.read_only = True
             dialog._show_test()
+        shown = copy.deepcopy(dialog.values())  # A copy: the window edits its own lists in place.
         result = dialog.values() if dialog.exec() and self.editable else None
+        result = None if result == shown else result
         dialog.deleteLater()
         return result
 
@@ -798,6 +811,8 @@ class MainWindow(QMainWindow):
         return [(spelling[key], count) for key, count in counts.most_common()]
 
     def pick_family_line(self):
+        if self.tree is None:  # Ctrl+B on the start page.
+            return
         lines = self.family_lines()
         if not lines:
             self.inform(t("line_title"), t("line_none"))
@@ -909,10 +924,12 @@ class MainWindow(QMainWindow):
             self.view.viewport().update()
 
     def show_shortcuts(self):
-        self.inform(t("menu_shortcuts").replace("&", ""), t("shortcuts_text"))
+        self.inform(t("menu_shortcuts").replace("&", ""), t("shortcuts_text") + "\n" + t("shortcuts_folds"))
 
     def show_preferences(self):
-        values = self.ask_preferences({
+        if self.settings is not None:
+            self.settings.sync()  # What another window changed meanwhile is shown, and kept.
+        shown = {
             "card_style": self.card_style,
             "generations_up": self.generations_up,
             "detail": self.detail_mode,
@@ -930,41 +947,50 @@ class MainWindow(QMainWindow):
             "surnames": self._setting(SURNAMES_KEY, "both", ("both", "birth", "current")),
             "map_tiles": self._setting(MAP_TILES_KEY, "", ("yes", "no")) == "yes",
             "map_search": self._setting(MAP_SEARCH_KEY, "", ("yes", "no")) == "yes",
-        })
+        }
+        values = self.ask_preferences(dict(shown))
         if values is None:
             return
+        # Only what was changed here is written: the rest may have been set in another window.
+        changed = {k for k in values if k not in shown or values[k] != shown[k]}
         self.generations_up = values["generations_up"]
         self.detail_mode = values["detail"]
         self.reopen_last = values["reopen_last"]
-        if self.settings is not None and values.get("language") != self.language_setting():
+        stored_language = self.settings.value(LANGUAGE_KEY) if self.settings is not None else None
+        if self.settings is not None and values.get("language") and (
+                "language" in changed or str(stored_language or strings.SYSTEM) != values["language"]):
+            # Also when the stored value is one this version doesn't know ("xx"): choosing
+            # System then really stores "system".
             self.settings.setValue(LANGUAGE_KEY, values["language"])
-            self.inform(t("pref_language"), t("pref_language_restart"))
+            if "language" in changed:
+                self.inform(t("pref_language"), t("pref_language_restart"))
         if self.settings is not None:
-            self.settings.setValue(GENERATIONS_KEY, self.generations_up)
-            self.settings.setValue(DETAIL_KEY, self.detail_mode)
-            self.settings.setValue(REOPEN_KEY, self.reopen_last)
+            for key, name, value in ((GENERATIONS_KEY, "generations_up", self.generations_up),
+                                     (DETAIL_KEY, "detail", self.detail_mode), (REOPEN_KEY, "reopen_last", self.reopen_last)):
+                if name in changed:
+                    self.settings.setValue(key, value)
             if values.get("theme") and values["theme"] != self._setting(THEME_KEY, "dark", theme.THEMES):
                 self.settings.setValue(THEME_KEY, values["theme"])
                 self.use_theme(values["theme"])
-            if values.get("toolbar"):
+            if values.get("toolbar") and "toolbar" in changed:
                 self.settings.setValue(TOOLBAR_KEY, values["toolbar"])
                 self.set_toolbar_style(values["toolbar"])
             for key, name in ((PLACEHOLDER_KEY, "placeholder"), (LINES_KEY, "lines"), (COLOURS_KEY, "colours"),
                               (SURNAMES_KEY, "surnames")):
-                if values.get(name):
+                if values.get(name) and name in changed:
                     self.settings.setValue(key, values[name])
             for key, name in ((MARK_DECEASED_KEY, "mark_deceased"), (SHADOWS_KEY, "shadows"),
                               (MOTION_KEY, "motion")):
-                if name in values:
+                if name in changed:
                     self.settings.setValue(key, "yes" if values[name] else "no")
             self.view.smooth = self._setting(MOTION_KEY, "yes", ("yes", "no")) == "yes"
-            if "show_tour" in values:
+            if "show_tour" in changed:
                 if values["show_tour"]:
                     self.settings.remove(TOUR_KEY)
                 else:
                     self.settings.setValue(TOUR_KEY, "done")
             for key, name in ((MAP_TILES_KEY, "map_tiles"), (MAP_SEARCH_KEY, "map_search")):
-                if name in values and (values[name] or self._setting(key, "", ("yes", "no"))):
+                if name in changed and (values[name] or self._setting(key, "", ("yes", "no"))):
                     self.settings.setValue(key, "yes" if values[name] else "no")
         if values["card_style"] != self.card_style:
             self.set_card_style(values["card_style"])
@@ -1030,6 +1056,7 @@ class MainWindow(QMainWindow):
         self.search_box = QLineEdit()
         self.search_box.setObjectName("search_box")
         self.search_box.setPlaceholderText(t("toolbar_find"))
+        self.search_box.setAccessibleName(t("toolbar_find"))
         self.search_box.setClearButtonEnabled(True)
         self.search_box.setFixedWidth(260)
         self.search_hits = {}
@@ -1112,15 +1139,27 @@ class MainWindow(QMainWindow):
         stored = self.settings.value(RECENT_KEY) or []
         if isinstance(stored, str):
             stored = [stored]
-        return [str(path) for path in stored]
+        if not isinstance(stored, (list, tuple)):
+            return []  # A hand-edited settings file: start without a recent list, never fail.
+        found, seen = [], set()
+        for path in stored:
+            if not isinstance(path, str) or not path:
+                continue
+            key = os.path.realpath(path)  # The same tree by a link or a trailing slash: once.
+            if key not in seen:
+                seen.add(key)
+                found.append(path)
+        return found
 
     def _add_recent(self, folder):
-        paths = [p for p in self._recent_trees() if Path(p) != Path(folder)]
+        self.settings.sync()  # Another window may have added its tree since: keep it.
+        mine = os.path.realpath(folder)
+        paths = [p for p in self._recent_trees() if os.path.realpath(p) != mine]
         self.settings.setValue(RECENT_KEY, [str(folder)] + paths[: RECENT_LIMIT - 1])
 
     def _fill_recent_menu(self):
         self.recent_menu.clear()
-        shown = [p for p in self._recent_trees() if (Path(p) / TREE_FILE).is_file()]
+        shown = [p for p in self._recent_trees() if has_tree(p)]
         if not shown:
             self.recent_menu.addAction(t("menu_recent_none")).setEnabled(False)
             return
@@ -1143,12 +1182,14 @@ class MainWindow(QMainWindow):
         if key not in directions or self.selected not in self.person_items:
             return False
         dx, dy = directions[key]
-        here = self.person_items[self.selected].pos()
+        # By where each card is drawn, its centre: the fan chart's segments all sit at (0, 0)
+        # and are drawn around it, so their positions say nothing.
+        here = self.person_items[self.selected].sceneBoundingRect().center()
         best, best_score = None, None
         for person_id, item in self.person_items.items():
             if person_id == self.selected:
                 continue
-            offset = item.pos() - here
+            offset = item.sceneBoundingRect().center() - here
             along = offset.x() * dx + offset.y() * dy
             if along <= 1:
                 continue
@@ -1211,7 +1252,7 @@ class MainWindow(QMainWindow):
         trees, seen = [], set()
         for path in found:
             key = str(path.resolve()) if path.exists() else str(path)
-            if key not in seen and (path / TREE_FILE).is_file():
+            if key not in seen and has_tree(path):
                 seen.add(key)
                 trees.append(path)
         return trees
@@ -1228,7 +1269,7 @@ class MainWindow(QMainWindow):
             return None
         last = self.settings.value(LAST_TREE_KEY)
         candidates = ([str(last)] if last else []) + self._recent_trees()
-        return next((c for c in candidates if (Path(c) / TREE_FILE).is_file()), None)
+        return next((c for c in candidates if has_tree(c)), None)
 
     def _fill_start_page(self):
         """Rebuilt each time it is shown, so the list of trees is up to date."""
@@ -1252,7 +1293,11 @@ class MainWindow(QMainWindow):
             grid.setSpacing(12)
             columns = 1 if len(trees) == 1 else 2
             for index, path in enumerate(trees):
-                card = start_cards.TreeCard(start_cards.summarise(path, TREE_FILE))
+                try:
+                    summary = start_cards.summarise(path, TREE_FILE)
+                except Exception:  # noqa: BLE001 - one odd tree must never stop the program starting.
+                    summary = start_cards.TreeSummary(Path(path))
+                card = start_cards.TreeCard(summary)
                 card.setObjectName(f"start_tree_{index}")
                 card.clicked.connect(lambda _checked=False, p=path: self.open_path(p))
                 if index == 0:
@@ -1278,16 +1323,20 @@ class MainWindow(QMainWindow):
         folder = Path(path)
         if folder.name == TREE_FILE:
             folder = folder.parent  # They picked the tree.json of an existing tree.
-        if (folder / TREE_FILE).is_file():
+        if folder.suffix != TREE_SUFFIX and not has_tree(folder):
+            folder = folder.with_name(folder.name + TREE_SUFFIX)
+        if has_tree(folder):
+            # A tree is already there (perhaps only its backups, its file gone): open it,
+            # which offers to recover it, rather than start an empty one over it.
             if self.confirm(t("confirm_open_existing_title"), t("confirm_open_existing", path=folder)):
                 return self.open_path(folder)
             return False
-        if folder.suffix != TREE_SUFFIX:
-            folder = folder.with_name(folder.name + TREE_SUFFIX)
         outer = next((p for p in folder.parents if (p / TREE_FILE).is_file()), None)
         if outer is not None:
             self.alert(t("open_failed_title"), t("error_tree_inside", tree=outer))
             return False
+        if not self._may_let_go():
+            return False  # Asked before anything is made: No leaves no new folder behind.
         try:
             create_tree(folder, Tree())
         except FileExistsError:
@@ -1296,14 +1345,17 @@ class MainWindow(QMainWindow):
         except OSError as error:
             self.alert(t("open_failed_title"), t("error_create_failed", error=error))
             return False
-        return self.open_path(folder)
+        return self.open_path(folder, asked=True)
 
-    def open_path(self, path):
-        """Open a tree. On any failure the tree already open stays open."""
-        folder = tree_folder_from(path)
+    def open_path(self, path, asked=False):
+        """Open a tree. On any failure the tree already open stays open. `asked`: the
+        person has already agreed to let the open tree go (New tree asks first)."""
+        # Absolute: "maiores A.tree" typed in one folder must not be remembered as "A.tree",
+        # which the next start would look for wherever it happens to be started.
+        folder = Path(os.path.abspath(tree_folder_from(path)))
         if self.folder is not None and folder.resolve() == Path(self.folder).resolve():
             return True  # Already open here (Open recent on itself): nothing to do, no "open elsewhere" alarm.
-        if not self._may_let_go():
+        if not asked and not self._may_let_go():
             return False
         lock = QLockFile(str(folder / LOCK_FILE))
         lock.setStaleLockTime(0)  # Only a dead process's lock counts as stale.
@@ -1324,16 +1376,7 @@ class MainWindow(QMainWindow):
         self.editable = True
         self.house = opened.house
         self.chart = opened.mode
-        self.selected = None
-        self.nav_history.clear()
-        self.collapsed.clear()
-        self.folded_up.clear()
-        self.side_folded.clear()
-        self.family_line, self.line_only_from = None, None  # A new tree: no line highlighted.
-        self.line_bar.hide()
-        self.line_only.blockSignals(True)
-        self.line_only.setChecked(False)
-        self.line_only.blockSignals(False)
+        self._forget_view_state()
         self.history.clear()
         self.photos.clear()
         self.save_error = None
@@ -1372,6 +1415,11 @@ class MainWindow(QMainWindow):
         if lock.tryLock(0):
             return True
         if lock.error() != QLockFile.LockError.LockFailedError:
+            if os.access(folder, os.W_OK) and shutil.disk_usage(folder).free < 1024 * 1024:
+                # A full disk mustn't keep you out of your tree: open it, and say why
+                # changes can't be saved until there is room again.
+                self.alert(t("open_failed_title"), t("open_disk_full", path=folder))
+                return True
             self.alert(t("open_failed_title"), t("error_not_writable", path=folder))
             return False
         host = lock.getLockInfo()[-2]
@@ -1400,10 +1448,22 @@ class MainWindow(QMainWindow):
             result = read_gedcom(path, self.today)
 
             def gedcom_documents(their_id, _documents):
-                return self._store_documents(result.documents.get(their_id, []), self.folder)[0]
+                stored = []
+                for entry in result.documents.get(their_id, []):
+                    one, failed = self._store_documents([entry], self.folder)
+                    stored += one
+                    if failed:  # Named in Combine's message, never dropped without a word.
+                        self._left_out.append(entry[1] or entry[0].name)
+                return stored
 
-            return (result.tree, lambda their_id, _stored: self._copy_photo_file(result.photos.get(their_id)),
-                    gedcom_documents, None, path.stem)
+            def gedcom_photo(their_id, _stored):
+                source = result.photos.get(their_id)
+                copied = self._copy_photo_file(source)
+                if source and not copied and their_id in result.tree.people:
+                    self._left_out.append(t("combine_left_out_photo", name=result.tree.people[their_id].display_name))
+                return copied
+
+            return result.tree, gedcom_photo, gedcom_documents, None, path.stem
         folder = path.parent if path.name == TREE_FILE else path
         if self.folder is not None and folder.resolve() == Path(self.folder).resolve():
             raise TreeLoadError(t("combine_same_tree"))
@@ -1416,13 +1476,20 @@ class MainWindow(QMainWindow):
                 stored = documents.copy_from_tree(folder, document["file"], self.folder) if self.folder else ""
                 if stored:
                     copied.append({**document, "file": stored})
+                else:  # Named in Combine's message, never dropped without a word.
+                    self._left_out.append(document.get("title") or Path(document["file"]).name)
+            return copied
+
+        def folder_photo(their_id, stored):
+            copied = self._copy_photo_file(resolve_photo(folder, stored))
+            if stored and not copied and their_id in tree.people:
+                self._left_out.append(t("combine_left_out_photo", name=tree.people[their_id].display_name))
             return copied
 
         def folder_raw(stored):
             return self._copy_raw_file(folder, stored)
 
-        return tree, lambda _their_id, stored: self._copy_photo_file(resolve_photo(folder, stored)), \
-            folder_documents, folder_raw, name
+        return tree, folder_photo, folder_documents, folder_raw, name
 
     def _copy_raw_file(self, their_folder, stored):
         """A DNA raw data file of their tree copied into this one's dna folder, or ""."""
@@ -1440,6 +1507,15 @@ class MainWindow(QMainWindow):
     def _copy_photo_file(self, path):
         if not path or self.folder is None:
             return ""
+        try:  # The very same file as a portrait here already (your own share copy coming
+            # back): that one, not a second copy that would then be kept as an extra photo.
+            data = Path(path).read_bytes()
+            for stored in dict.fromkeys(p.photo for p in self.tree.people.values() if p.photo):
+                mine = resolve_photo(self.folder, stored)
+                if mine is not None and mine.stat().st_size == len(data) and mine.read_bytes() == data:
+                    return stored
+        except OSError:
+            pass
         try:
             return import_photo(path, self.folder)
         except PhotoError:
@@ -1451,10 +1527,13 @@ class MainWindow(QMainWindow):
         stored, failed = [], 0
         if folder is None:
             return stored, len(found)
-        for path, title, kind, date in found:
+        for entry in found:
+            path, title, kind, date = entry[:4]
+            ref = entry[4] if len(entry) > 4 else ""
             try:
                 stored.append({"file": documents.store_document(path, folder), "title": title or path.stem,
-                               "kind": kind or ("photo" if documents.is_image(path) else "other"), "date": date})
+                               "kind": kind or ("photo" if documents.is_image(path) else "other"), "date": date,
+                               **({"ref": ref} if ref else {})})
             except documents.DocumentError:
                 failed += 1  # Refused (kind, size, gone). A disk error is raised to the caller.
         return stored, failed
@@ -1464,6 +1543,7 @@ class MainWindow(QMainWindow):
         return dialog.values() if dialog.exec() else None
 
     def combine_with(self, source):
+        self._left_out = []  # Their files that couldn't be brought across, for the message.
         try:
             theirs, copy_photo, copy_documents, copy_raw, name = self._read_other_tree(source)
         except (TreeLoadError, GedcomError) as error:
@@ -1505,7 +1585,11 @@ class MainWindow(QMainWindow):
                 result.tree.people, result.tree.families, result.tree.extra
 
         if self.apply_edit(change) and self.save_error is None:
-            self.inform(t("combine_title", name=name), combine.describe_result(result))
+            message = combine.describe_result(result)
+            if self._left_out:
+                shown = ", ".join(self._left_out[:10]) + (" …" if len(self._left_out) > 10 else "")
+                message += "\n\n" + t("combine_left_out", names=shown)
+            self.inform(t("combine_title", name=name), message)
             return True
         return False
 
@@ -1558,7 +1642,7 @@ class MainWindow(QMainWindow):
         try:
             size = webshare.single_file(path, self._web_data(options), options.get("password") or None)
         except OSError as error:
-            self.alert(t("webpage_title"), t("export_failed", path=f"{path}: {error}"))
+            self._export_failed(t("webpage_title"), path, error)
             return False
         self.inform(t("webpage_title"), t("webpage_done", path=path, size=f"{size / 1_000_000:.1f}",
                                           locked=t("webpage_locked_yes") if options.get("password")
@@ -1627,7 +1711,7 @@ class MainWindow(QMainWindow):
         try:
             # A private working folder (a name nobody else chose): only it is ever deleted.
             target.parent.mkdir(parents=True, exist_ok=True)
-            work = Path(tempfile.mkdtemp(prefix=f".{target.stem}-share-", dir=target.parent))
+            work = Path(tempfile.mkdtemp(prefix=f".{target.stem[:60]}-share-", dir=target.parent))
             partial = work / target.name
             create_tree(partial, shared)
             copied = 0
@@ -1658,8 +1742,10 @@ class MainWindow(QMainWindow):
         return True
 
     # GEDCOM and pictures.
-    def choose_import(self):
-        source = self.ask_open_file(t("import_title"), t("gedcom_filter"))
+    def choose_import(self, source=None):
+        """Import a GEDCOM file; `source` when it is already known (given on the command
+        line, as "maiores fam.ged")."""
+        source = source or self.ask_open_file(t("import_title"), t("gedcom_filter"))
         if not source:
             return
         start = default_trees_folder()
@@ -1671,7 +1757,19 @@ class MainWindow(QMainWindow):
             self.import_gedcom(source, target)
 
     def import_gedcom(self, source, target):
-        """Read a GEDCOM file into a new tree folder. The GEDCOM is only ever read."""
+        """Read a GEDCOM file into a new tree folder. The GEDCOM is only ever read. A zipped
+        bundle (a .zip with the file and its pictures, or GEDCOM 7's .gdz) is unpacked into
+        a private folder first, and its pictures come along."""
+        if Path(source).suffix.lower() in (".zip", ".gdz"):
+            with tempfile.TemporaryDirectory(prefix="maiores-bundle-") as unpacked:
+                found = unpack_gedcom_bundle(source, Path(unpacked))
+                if found is None:
+                    self.alert(t("import_title"), t("import_not_gedcom"))
+                    return False
+                return self._import_gedcom(found, target)
+        return self._import_gedcom(source, target)
+
+    def _import_gedcom(self, source, target):
         try:
             result = read_gedcom(source, self.today)
         except GedcomError as error:
@@ -1684,28 +1782,51 @@ class MainWindow(QMainWindow):
         if folder.exists():
             self.alert(t("import_title"), t("error_tree_exists", path=folder))
             return False
+        if not self._may_let_go():
+            return False  # Asked before anything is made: No leaves no new tree behind.
         # Made in a private working folder and moved into place only when complete: a
         # failure (a full disk) leaves nothing half-made behind, and trying again works.
-        copied = failed = documents_failed = 0
+        copied = failed = documents_failed = documents_copied = 0
         work = None
         try:
             folder.parent.mkdir(parents=True, exist_ok=True)
-            work = Path(tempfile.mkdtemp(prefix=f".{folder.stem}-import-", dir=folder.parent))
+            work = Path(tempfile.mkdtemp(prefix=f".{folder.stem[:60]}-import-", dir=folder.parent))
             staged = work / folder.name
             create_tree(staged, result.tree)
+            base = Path(source).parent.resolve()
+
+            def keep_reference(person_id, file_path, title=""):
+                # A file that couldn't be used: its line is kept, so the export still names it.
+                try:
+                    shown = file_path.resolve().relative_to(base).as_posix()
+                except ValueError:
+                    shown = file_path.name
+                lines = ["1 OBJE", f"2 FILE {shown}"] + ([f"2 TITL {title}"] if title else [])
+                person = result.tree.people[person_id]
+                person.extra["gedcom"] = as_list(person.extra.get("gedcom")) + lines
+
             for person_id, photo in result.photos.items():
                 try:
-                    result.tree.people[person_id].photo = import_photo(photo, staged)
+                    person = result.tree.people[person_id]
+                    person.photo = import_photo(photo, staged)
+                    if isinstance(person.extra.get("photo_title"), dict):
+                        person.extra["photo_title"]["file"] = person.photo
                     copied += 1
                 except PhotoError:
                     failed += 1  # Not a usable picture; a disk error stops the import.
+                    keep_reference(person_id, photo)
             for person_id, found in result.documents.items():
-                stored, not_copied = self._store_documents(found, staged)
-                documents_failed += not_copied
+                stored = []
+                for entry in found:
+                    one, not_copied = self._store_documents([entry], staged)
+                    stored += one
+                    if not_copied:
+                        documents_failed += 1
+                        keep_reference(person_id, entry[0], entry[1])
                 if stored:
                     result.tree.people[person_id].extra["documents"] = stored
-                    copied += len(stored)
-            if copied:
+                    documents_copied += len(stored)
+            if copied or documents_copied or failed or documents_failed:
                 save_tree(staged, result.tree)
             if folder.exists():
                 raise FileExistsError(folder)
@@ -1729,6 +1850,8 @@ class MainWindow(QMainWindow):
         ]
         if copied:
             lines.append(t("import_photos", count=copied))
+        if documents_copied:
+            lines.append(t("import_documents", count=documents_copied))
         if failed:
             lines.append(t("import_photos_failed", count=failed))
         if documents_failed:
@@ -1738,7 +1861,7 @@ class MainWindow(QMainWindow):
         problems = validate(result.tree)
         if problems:
             lines.append(t("import_issues", count=len(problems)))
-        opened = self.open_path(folder)
+        opened = self.open_path(folder, asked=True)
         self.alert(t("import_done_title"), "\n\n".join(lines))
         return opened
 
@@ -1765,6 +1888,19 @@ class MainWindow(QMainWindow):
         if path:
             self.export_gedcom(path, hide)
 
+    def _export_failed(self, title, path, error):
+        """Name the file the person chose (not a hidden working file), say why, and take
+        away an earlier "Saved" from the status bar."""
+        self.statusBar().clearMessage()
+        text = str(error)
+        if not text.startswith(t("export_failed", path=path)[:20]):
+            reason = (getattr(error, "strerror", None) or getattr(getattr(error, "__cause__", None), "strerror", None)
+                      or text).rstrip(".")
+            text = t("export_failed", path=f"{path}: {reason}")
+            if reason.endswith(("?", "？")) and text.endswith("."):
+                text = text[:-1]  # "Is the disk full?" ends the sentence itself.
+        self.alert(title, text)
+
     def export_gedcom(self, path, hide=False):
         path = Path(path)
         if not path.suffix:
@@ -1772,7 +1908,7 @@ class MainWindow(QMainWindow):
         try:
             count = export_gedcom(self._export_tree(hide), self.folder, path)
         except ExportError as error:
-            self.alert(t("export_gedcom_title"), str(error))
+            self._export_failed(t("export_gedcom_title"), path, error)
             return False
         message = (
             t("export_photos_note", path=path, count=count)
@@ -1810,7 +1946,7 @@ class MainWindow(QMainWindow):
                 self.detail_mode,
             )
         except ExportError as error:
-            self.alert(t("export_picture_title"), str(error))
+            self._export_failed(t("export_picture_title"), path, error)
             return False
         self.statusBar().showMessage(t("export_done", path=path))
         return True
@@ -1907,21 +2043,35 @@ class MainWindow(QMainWindow):
         self.editable = False
         self.house = None
         self.chart = "family"
-        self.selected = None
-        self.nav_history.clear()
-        self.collapsed.clear()
-        self.folded_up.clear()
-        self.side_folded.clear()
-        self.family_line, self.line_only_from = None, None  # A new tree: no line highlighted.
-        self.line_bar.hide()
-        self.line_only.blockSignals(True)
-        self.line_only.setChecked(False)
-        self.line_only.blockSignals(False)
+        self._forget_view_state()
         self.history.clear()
         self.photos.clear()
         self.setWindowTitle(t("window_title"))
         self.refresh(keep_view=False)
         self.statusBar().showMessage(t("status_sample"))
+
+    def _forget_view_state(self):
+        """Everything about how the last tree was being looked at: another tree may reuse
+        the same person ids, so a search, a highlighted path or line must not carry over."""
+        self.selected = None
+        # The tree it was about is let go: a failed save of it must not be asked about again
+        # for the next one (the sample can never be saved).
+        self.save_error = None
+        if self.tour is not None:  # The tour points at cards of the tree going away.
+            self.tour.finish("skipped")
+        self.nav_history.clear()
+        self.collapsed.clear()
+        self.folded_up.clear()
+        self.side_folded.clear()
+        self.path_ids = set()
+        self.family_line, self.line_only_from = None, None  # A new tree: no line highlighted.
+        self.line_bar.hide()
+        self.line_only.blockSignals(True)
+        self.line_only.setChecked(False)
+        self.line_only.blockSignals(False)
+        self.search_box.clear()
+        self.search_hits = {}
+        self.search_model.setStringList([])
 
     def _release_current(self):
         if self.lock is not None:
@@ -1976,6 +2126,12 @@ class MainWindow(QMainWindow):
         self.export_gedcom_action.setEnabled(has_people)
         self.export_picture_action.setEnabled(has_people)
         self.restore_action.setEnabled(self.editable)
+        # Enabled only where they can do something, not to return without a word.
+        self.combine_action.setEnabled(bool(self.tree) and self.editable)
+        self.share_action.setEnabled(has_people and self.folder is not None)
+        self.webpage_action.setEnabled(has_people)
+        self.liveshare_action.setEnabled(has_people)
+        self.family_line_action.setEnabled(self.tree is not None)
         self.undo_tool.setEnabled(self.undo_action.isEnabled())
         self.redo_tool.setEnabled(self.redo_action.isEnabled())
         undo_what, redo_what = self.history.next_undo(), self.history.next_redo()
@@ -1996,6 +2152,9 @@ class MainWindow(QMainWindow):
 
         if self.tree is None:
             self.selected = None
+            # Let go of the last chart: its cards (with their portraits) aren't kept for the start page.
+            self.person_items, self.visible_ids = {}, set()
+            self.view.replace_scene(QGraphicsScene(), keep_view=False)
             self._place_add_buttons()  # Removes any left on the old picture.
             self._fill_start_page()
             self.pages.setCurrentIndex(PAGE_START)
@@ -2138,6 +2297,10 @@ class MainWindow(QMainWindow):
         return self.photos.get(self.folder, stored)
 
     def _mark_selected(self):
+        # A screen reader hears who is selected: the cards themselves are drawn, not widgets.
+        if self.tree is not None and self.selected in self.tree.people:
+            person = self.tree.people[self.selected]
+            self.view.setAccessibleDescription(f"{person.display_name} {person.years_label()}".strip())
         # Every card, not just the first: someone can rightly appear twice.
         from canvas import PersonItem
         scene = self.view.scene()
@@ -2254,7 +2417,9 @@ class MainWindow(QMainWindow):
 
     def ask_sources(self):
         dialog = SourcesDialog(self, self.tree)
+        shown = copy.deepcopy(dialog.values())  # A copy: the window edits its own lists in place.
         result = dialog.values() if dialog.exec() else None
+        result = None if result == shown else result
         dialog.deleteLater()
         return result
 
@@ -2263,8 +2428,10 @@ class MainWindow(QMainWindow):
         if not self.tree or not self.editable:
             return
         selected = 0
+        candidates = None
         while True:
-            candidates = find_duplicates(self.tree)
+            if candidates is None:  # Found again after a merge, which changes who looks alike.
+                candidates = find_duplicates(self.tree)
             if not candidates:
                 self.inform(t("duplicates_title"), t("duplicates_none"))
                 return
@@ -2274,8 +2441,14 @@ class MainWindow(QMainWindow):
             action, keep, other, selected = answer
             if action == "merge":
                 self.apply_edit(lambda: edits.merge_people(self.tree, keep, other), focus=keep)
+                candidates = None
             else:
-                self.apply_edit(lambda: edits.mark_not_duplicate(self.tree, keep, other))
+                # "Not the same" changes only that pair: the rest of the list stands, so it
+                # is not searched again (two minutes on 34,000 people).
+                if self.apply_edit(lambda: edits.mark_not_duplicate(self.tree, keep, other)):
+                    candidates = [c for c in candidates if {c.a, c.b} != {keep, other}]
+                else:
+                    candidates = None
 
     def ask_duplicates(self, candidates, selected):
         dialog = DuplicatesDialog(self, self.tree, candidates, selected)
@@ -2286,7 +2459,9 @@ class MainWindow(QMainWindow):
     # Research: to-do lists and life stories.
     def ask_tasks(self, person):
         dialog = TasksDialog(self, person)
+        shown = copy.deepcopy(dialog.values())  # A copy: the window edits its own lists in place.
         result = dialog.values() if dialog.exec() else None
+        result = None if result == shown else result  # OK with nothing changed: nothing saved.
         dialog.deleteLater()
         return result
 
@@ -2297,7 +2472,9 @@ class MainWindow(QMainWindow):
 
     def ask_story(self, person):
         dialog = StoryDialog(self, person)
+        shown = copy.deepcopy(dialog.values())  # A copy: the window edits its own lists in place.
         result = dialog.values() if dialog.exec() else None
+        result = None if result == shown else result
         dialog.deleteLater()
         return result
 
@@ -2412,7 +2589,9 @@ class MainWindow(QMainWindow):
         if hide is None:
             return
         suffix = ".odt" if options["format"] == "odt" else ".pdf"
-        name = f"{t('report_kind_' + options['kind'])} - {self.tree.people[self.selected].display_name}{suffix}"
+        # The name as the report will show it: a hidden or private person's is not suggested.
+        shown = self._export_tree(hide).people.get(self.selected)
+        name = f"{t('report_kind_' + options['kind'])} - {shown.display_name if shown else ''}".rstrip(" -") + suffix
         path = self.ask_save_file(t("report_title"), Path.home() / name, t(f"report_filter_{options['format']}"))
         if path:
             self.write_report(path, options, hide)
@@ -2432,7 +2611,7 @@ class MainWindow(QMainWindow):
         try:
             reports.write_document(make(), path)
         except OSError as error:
-            self.alert(t("report_title"), t("export_failed", path=f"{path}: {error}"))
+            self._export_failed(t("report_title"), path, error)
             return False
         self.statusBar().showMessage(t("export_done", path=path))
         return True
@@ -2469,7 +2648,7 @@ class MainWindow(QMainWindow):
             pages = poster.write_poster(scene, area, path, options["paper"], options["across"],
                                         lambda row, column: t("poster_tile", row=row, column=column))
         except OSError as error:
-            self.alert(t("poster_title"), t("export_failed", path=f"{path}: {error}"))
+            self._export_failed(t("poster_title"), path, error)
             return False
         self.statusBar().showMessage(t("poster_done", path=path, count=pages))
         return True
@@ -2497,7 +2676,7 @@ class MainWindow(QMainWindow):
         try:
             count = export_map_pins(tree, path, all_facts(tree), {"birth"} if births_only else None)
         except ExportError as error:
-            self.alert(t("map_title"), str(error))
+            self._export_failed(t("map_title"), path, error)
             return False
         self.inform(t("map_title"), t("map_done", count=count, path=path))
         return True
@@ -2517,8 +2696,10 @@ class MainWindow(QMainWindow):
             self.centre_on(first)
             self.path_ids = set(relation.path)
         self._mark_selected()
-        self.inform(t("relation_title"), t("relation_text", a=self.tree.people[first].display_name,
-                                           b=self.tree.people[other].display_name, words=words))
+        names = {"a": self.tree.people[first].display_name, "b": self.tree.people[other].display_name}
+        # "Ana is Ivo's not related..." reads wrong in English: a sentence of its own.
+        self.inform(t("relation_title"), t("relation_none", **names) if relation.kind == "none"
+                    else t("relation_text", **names, words=words))
 
     def _show_panel_now(self):
         if self.selected is None:
@@ -2567,6 +2748,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(t("status_no_house", name=name))
 
     def _context_menu(self, person_id, position):
+        if person_id is None:  # From the keyboard: whoever is selected.
+            person_id = self.selected
+            if self.tree is None or person_id not in self.person_items:
+                return
+            card = self.person_items[person_id].sceneBoundingRect().center()
+            position = self.view.viewport().mapToGlobal(self.view.mapFromScene(card))
         self.select(person_id)
         menu = QMenu(self)
         for key, label, enabled in self.person_actions(person_id):
@@ -2686,6 +2873,16 @@ class MainWindow(QMainWindow):
         self.refresh(keep_view=False)
         self._remember_house()
 
+    def _fold_key(self, key):
+        """Shift+Up, Shift+Down, Shift+Left or Right: fold or unfold the selected person's
+        ancestors, descendants, or brothers and sisters."""
+        direction = {Qt.Key.Key_Up: "up", Qt.Key.Key_Down: "down",
+                     Qt.Key.Key_Left: "side", Qt.Key.Key_Right: "side"}.get(key)
+        if direction is None or self.tree is None or self.selected not in self.tree.people:
+            return False
+        self.toggle_fold(self.selected, direction)
+        return True
+
     def toggle_fold(self, person_id, direction):
         """A fold button: hide or show someone's ancestors ("up") or descendants ("down")."""
         if direction == "down":
@@ -2718,7 +2915,7 @@ class MainWindow(QMainWindow):
         """Every date warning in the tree, as (person id, text), in surname order."""
         found = []
         index = TreeIndex(self.tree)  # Built once: per person it made this take minutes.
-        for person in sorted(self.tree.people.values(), key=lambda p: (p.surname, p.given, p.id)):
+        for person in sorted(self.tree.people.values(), key=lambda p: (collation_key(p.surname), collation_key(p.given), p.id)):
             for text in date_warnings(self.tree, person.id, self.today, index):
                 found.append((person.id, text))
         return found
@@ -2913,6 +3110,8 @@ class MainWindow(QMainWindow):
             self.save_error = str(error)
             self.statusBar().showMessage(t("status_saved_failed", error=error))
         else:
+            if self.save_error is not None:  # Saved again: the old failure must not stay on show.
+                self.statusBar().clearMessage()
             self.save_error = None
 
     def undo(self):
@@ -3065,7 +3264,8 @@ class MainWindow(QMainWindow):
         other = self.tree.people[source].display_name
         if not self.confirm(t("merge_confirm_title"), t("merge_confirm", other=other, name=name)):
             return
-        if self.apply_edit(lambda: edits.merge_people(self.tree, target, source), focus=target):
+        if self.apply_edit(lambda: edits.merge_people(self.tree, target, source), focus=target) \
+                and self.save_error is None:
             self.statusBar().showMessage(t("merge_done", other=other, name=name))
 
     def _new_person_safely(self, values):
@@ -3091,7 +3291,7 @@ class MainWindow(QMainWindow):
         values = self.ask_person(
             t("title_edit", name=person.display_name), person_to_values(person), link, rows
         )
-        if values is None:
+        if values is None or values.get("unchanged"):
             return
 
         source = values.get("photo_source")
@@ -3120,7 +3320,12 @@ class MainWindow(QMainWindow):
         if not self.editable or person_id not in self.tree.people:
             return
         self.select(person_id)
-        if isinstance(picture, str) and Path(picture).suffix.lower() not in PICTURE_SUFFIXES:
+        if isinstance(picture, list):
+            self.attach_documents(person_id, picture)  # Several files: every one is attached.
+            return
+        if isinstance(picture, str) and (Path(picture).suffix.lower() not in PICTURE_SUFFIXES
+                                         or not QImageReader(picture).canRead() and documents.is_allowed(picture)):
+            # A picture this computer cannot show (an iPhone .heic, say) is still kept, as a document.
             self.attach_documents(person_id, [picture])
             return
         self.apply_edit(lambda: self._attach_photo(self.tree.people[person_id], picture), focus=person_id)
@@ -3131,8 +3336,11 @@ class MainWindow(QMainWindow):
                               find_person=lambda chooser_title: self.ask_existing_person(chooser_title, set()))
         dialog = DocumentsDialog(self, person, self.folder, default_trees_folder().parent, face_links(self.tree),
                                  context)
+        shown = copy.deepcopy(dialog.values())  # A copy: the window edits its own lists in place.
         accepted = dialog.exec()
         result = (dialog.values(), dialog.portrait_from, dialog.face_changes, dialog.portraits) if accepted else None
+        if result is not None and result[0] == shown and result[1] is None and not result[2] and not result[3]:
+            result = None  # OK with nothing changed: nothing saved, no undo step.
         dialog.deleteLater()
         return result
 
@@ -3174,17 +3382,23 @@ class MainWindow(QMainWindow):
         """Files dropped on someone: copied into the tree and attached, in one undoable step."""
         if self.folder is None:
             return False
-        added, refused = [], []
+        added, refused, failed = [], [], []
         for path in paths:
             try:
                 stored = documents.store_document(path, self.folder)
-            except (documents.DocumentError, OSError):
+            except documents.DocumentError:
                 refused.append(Path(path).name)
+                continue
+            except OSError as error:  # The file is fine; the tree's folder could not take it.
+                failed.append((Path(path).name, error))
                 continue
             added.append({"file": stored, "title": Path(path).stem,
                           "kind": "photo" if documents.is_image(path) else "other", "date": ""})
         if refused:
             self.alert(t("window_title"), t("documents_refused", names=", ".join(refused)))
+        if failed:
+            self.alert(t("window_title"), t("documents_not_copied", names=", ".join(n for n, _e in failed),
+                                             error=failed[0][1].strerror or failed[0][1]))
         if not added:
             return False
 
@@ -3193,8 +3407,8 @@ class MainWindow(QMainWindow):
             current = person_documents(person)
             person.extra["documents"] = current + [d for d in added if all(d["file"] != c["file"] for c in current)]
 
-        ok = self.apply_edit(change, focus=person_id)
-        if ok:
+        ok = self.apply_edit(change, focus=person_id) and self.save_error is None
+        if ok:  # Not after a failed save: the message about that stays in view.
             self.statusBar().showMessage(t("status_documents_added", count=len(added),
                                            name=self.tree.people[person_id].display_name))
         return ok
@@ -3370,7 +3584,8 @@ class MainWindow(QMainWindow):
         text = t("merge_confirm", other=other_name, name=name)
         if not self.confirm(t("merge_confirm_title"), text):
             return
-        if self.apply_edit(lambda: edits.merge_people(self.tree, person_id, other), focus=person_id):
+        if self.apply_edit(lambda: edits.merge_people(self.tree, person_id, other), focus=person_id) \
+                and self.save_error is None:
             self.statusBar().showMessage(t("merge_done", other=other_name, name=name))
 
     def _add_child(self, person_id):
@@ -3543,9 +3758,61 @@ def surname_colour(person):
     return theme.soft_colour(sum(ord(c) * (i + 7) for i, c in enumerate(name)))
 
 
+def unpack_gedcom_bundle(bundle, into, limit=4 << 30):
+    """The GEDCOM file in a .zip or .gdz, unpacked with its pictures into `into`; None if
+    there is none. Nothing is written outside `into` ("../" names and links are skipped),
+    and an archive that would unpack to more than `limit` bytes is refused."""
+    import zipfile
+    root = into.resolve()
+    try:
+        with zipfile.ZipFile(bundle) as archive:
+            members = [m for m in archive.infolist() if not m.is_dir()]
+            if sum(m.file_size for m in members) > limit:
+                return None
+            for member in members:
+                if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                    continue  # A link inside the archive: never followed.
+                target = (root / member.filename).resolve()
+                if not target.is_relative_to(root):
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, open(target, "wb") as copy:
+                    shutil.copyfileobj(source, copy)
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return None
+    candidates = sorted(root.rglob("*.ged"), key=lambda p: (p.name.lower() != "gedcom.ged", len(p.parts)))
+    return candidates[0] if candidates else None
+
+
+def unique_accelerators(menu):
+    """Every menu title and item gets a letter (Alt+letter) of its own within its menu:
+    the translator's choice where it is free, else the first free letter of the text.
+    Two items with one letter only highlight each other; an item with none can't be
+    reached by letter at all."""
+    def give(actions):
+        used = set()
+        for action in actions:
+            text = action.text()
+            if action.isSeparator() or not text or "&&" in text or action.property("no_accelerator"):
+                continue
+            marked = text.find("&")
+            plain = text.replace("&", "")
+            choices = ([marked] if 0 <= marked < len(plain) else []) + list(range(len(plain)))
+            choice = next((i for i in choices if plain[i].isalnum() and plain[i].lower() not in used), None)
+            if choice is None:
+                action.setText(plain)
+            else:
+                used.add(plain[choice].lower())
+                action.setText(plain[:choice] + "&" + plain[choice:])
+            if action.menu() is not None:
+                give(action.menu().actions())
+
+    give(menu.actions())
+
+
 def apply_theme(app, name="dark"):
     """One look on every computer: the chosen theme, not the system's widget style."""
-    app.setStyle("Fusion")
+    app.setStyle(theme.OutlinedStyle("Fusion"))  # Fusion, with check boxes that can be seen.
     QFontDatabase.addApplicationFont(str(RESOURCE_ROOT / "fonts" / "NotoSerif-Regular.ttf"))
     app.setWindowIcon(QIcon(str(RESOURCE_ROOT / "assets" / "icon.png")))
     theme.apply(name, app)
@@ -3621,6 +3888,8 @@ def main(argv=None):
     if args.import_gedcom:
         if not window.import_gedcom(args.import_gedcom, args.folder):
             return 1
+    elif args.folder and Path(args.folder).suffix.lower() in (".ged", ".gedcom") and Path(args.folder).is_file():
+        window.choose_import(args.folder)  # A GEDCOM file: imported into a new tree, as File > Import does.
     elif args.folder:
         if not window.open_path(args.folder) and args.screenshot:
             return 1

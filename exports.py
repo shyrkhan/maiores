@@ -1,4 +1,5 @@
 """Sending a tree out of the program: GEDCOM files, pictures and PDFs."""
+import glob
 import os
 import shutil
 import tempfile
@@ -10,7 +11,7 @@ from PySide6.QtGui import QColor, QImage, QPageLayout, QPageSize, QPainter, QPdf
 from canvas import BACKGROUND, INK_PRINT, INK_SCREEN, build_scene
 from gedcom import write_gedcom
 from photos import resolve_photo
-from storage import atomic_write, temp_beside
+from storage import atomic_write, check_written, temp_beside
 from strings import t
 
 PICTURE_SCALE = 2.0
@@ -69,8 +70,12 @@ def export_gedcom(tree, folder, path):
     text = write_gedcom(tree, path, record_photo)
     # One private working folder per export (a name nobody else can have chosen): only it is
     # ever deleted. The old file and folder wait in it until the new pair is in place.
+    # A working folder left by an export cut short (a USB stick pulled out) goes now.
+    for leftover in path.parent.glob(f".{glob.escape(path.stem[:60])}-export-*"):
+        if leftover.is_dir() and set(p.name for p in leftover.iterdir()) <= {"new", "old", "old.ged"}:
+            shutil.rmtree(leftover, ignore_errors=True)  # Only a folder holding what an export makes.
     try:
-        work = Path(tempfile.mkdtemp(prefix=f".{path.stem}-export-", dir=path.parent))
+        work = Path(tempfile.mkdtemp(prefix=f".{path.stem[:60]}-export-", dir=path.parent))
     except OSError as error:
         raise ExportError(str(error)) from error
     fresh, old, old_file = work / "new", work / "old", work / "old.ged"
@@ -180,6 +185,7 @@ def _export_pdf(tree, layout, today, photo_for, path, detail="age"):
         scene.render(painter, QRectF(painter.viewport()), area, Qt.AspectRatioMode.KeepAspectRatio)
         painter.end()
         del writer  # Closes the file, which Windows needs before it can be renamed.
+        check_written(temp)  # A full disk leaves a cut-off file and no error.
         temp.replace(path)
     except OSError as error:
         raise ExportError(str(error)) from error

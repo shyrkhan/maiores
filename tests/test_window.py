@@ -982,7 +982,7 @@ class ExchangeTests(WindowCase):
         self.answers.alerts.clear()
         self.assertTrue(self.window.import_gedcom(ged, target))
         self.assertEqual(self.window.folder, self.temp / "Copy.tree")
-        self.assertIn("Imported 16 people", self.answers.alerts[0])
+        self.assertIn("People: 16", self.answers.alerts[0])
         tree = self.window.tree
         self.assertEqual(len(tree.people), 16)
         self.assertEqual(validate(tree), [])
@@ -1871,7 +1871,7 @@ class ProfessionalMenuTests(WindowCase):
         self.open_sample()
         self.window.select("luka")
         self.window._fill_person_menu()
-        texts = [a.text() for a in self.window.person_menu.actions()]
+        texts = [a.text().replace("&", "") for a in self.window.person_menu.actions()]
         self.assertEqual(texts[0], "Luka Šimić")
         self.assertIn("Edit...", texts)
 

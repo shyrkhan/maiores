@@ -8,7 +8,10 @@ notes or counted in the report, and never silently thrown away.
 No interface code here. Photos are returned as paths for the caller to import.
 """
 import datetime
+import glob
 import re
+import urllib.parse
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -50,6 +53,9 @@ def date_to_gedcom(stored):
     parsed = parse_date(stored)
     if parsed is None:
         return stored
+    if parsed.end_year is not None and parsed.end is not None:
+        start = _gedcom_single(replace(parsed, end=None, end_year=None))
+        return f"BET {start} AND {_gedcom_single(parsed.end)}"
     if parsed.end_year is not None:
         return f"BET {parsed.year:04d} AND {parsed.end_year:04d}"
     if parsed.qualifier == "from":
@@ -93,8 +99,8 @@ QUAY_TO_QUALITY = {"3": "original", "2": "copy", "1": "family", "0": "family"}
 # The people at an event. GEDCOM 5.5.1 allows ASSO only on a person's own record, so a
 # godfather is written there with the fact named in _FT_FACT; marriage witnesses go under
 # MARR, the place GEDCOM 7 gives them. Someone known only by name uses _FT_ROLE + NAME.
-ROLE_WORDS = {"godfather": "Godfather", "godmother": "Godmother", "witness": "Witness", "priest": "Priest",
-              "informant": "Informant", "midwife": "Midwife", "other": "Other"}
+ROLE_WORDS = {"godfather": "Godfather", "godmother": "Godmother", "godparent": "Godparent", "witness": "Witness",
+              "priest": "Priest", "informant": "Informant", "midwife": "Midwife", "other": "Other"}
 NAME_TYPE_WORDS = {"birth": "birth", "married": "married", "nickname": "aka", "latin": "aka", "other": "aka"}
 
 
@@ -109,8 +115,11 @@ class _Out:
 
 
 def _coordinate(value, positive, negative):
-    """43.5167 -> N43.5167, the form GEDCOM uses."""
-    return f"{positive if value >= 0 else negative}{abs(value):.4f}"
+    """43.5167 -> N43.5167, the form GEDCOM uses: at least four decimals, and up to six
+    when the place was given that exactly (a house, not just the village)."""
+    digits = f"{abs(value):.6f}".rstrip("0")
+    digits = digits if len(digits.split(".")[1]) >= 4 else f"{abs(value):.4f}"
+    return f"{positive if value >= 0 else negative}{digits}"
 
 
 def _place_lines(place, lines, out):
@@ -130,7 +139,7 @@ def _citations(fact, level, lines, out):
             continue
         lines.append(f"{level} SOUR {pointer}")
         if citation.get("page"):
-            lines.append(f"{level + 1} PAGE {_safe_value(citation['page'])}")
+            _long_text(level + 1, "PAGE", citation["page"], lines)
         if citation.get("quality") in QUALITY_TO_QUAY:
             lines.append(f"{level + 1} QUAY {QUALITY_TO_QUAY[citation['quality']]}")
         if citation.get("document"):
@@ -195,6 +204,7 @@ EVEN_TYPES = {"military": "Military service", "other": "Other"}
 
 
 def _life_events(person, lines, out=None):
+    # Long text goes on CONC/CONT lines: other programs refuse a line over 255 characters.
     for event in person_events(person):
         kind, text = event["type"], event["text"]
         own = event.get("tag")
@@ -203,21 +213,23 @@ def _life_events(person, lines, out=None):
             # The tag it came as (CHR, BARM, IDNO...): written back the same way.
             inline = own in INLINE_TAGS or EVENT_TAGS.get(READ_TAGS.get(own, ""), ("", False))[1]
             inline = placed == "line" if placed in ("line", "note") else inline
-            lines.append(f"1 {own} {_safe_value(text)}".rstrip() if inline else f"1 {own}")
+            _long_text(1, own, text if inline else "", lines)
             if text and not inline:
-                lines.append(f"2 NOTE {_safe_value(text)}")
+                _long_text(2, "NOTE", text, lines)
         elif kind in EVENT_TAGS:
             tag, inline = EVENT_TAGS[kind]
             inline = placed == "line" if placed in ("line", "note") else inline
-            lines.append(f"1 {tag} {_safe_value(text)}".rstrip() if inline else f"1 {tag}")
+            _long_text(1, tag, text if inline else "", lines)
             if text and not inline:
-                lines.append(f"2 NOTE {_safe_value(text)}")
+                _long_text(2, "NOTE", text, lines)
         else:
-            lines.append(f"1 EVEN {_safe_value(text)}".rstrip() if placed != "note" else "1 EVEN")
+            _long_text(1, "EVEN", text if placed != "note" else "", lines)
             lines.append(f"2 TYPE {_safe_value(event.get('label') or EVEN_TYPES.get(kind, 'Other'))}")
             if text and placed == "note":
-                lines.append(f"2 NOTE {_safe_value(text)}")
+                _long_text(2, "NOTE", text, lines)
         _event_details(event, lines, out)
+        if event.get("ref"):
+            lines.append(f"2 _FT_REF {event['ref']}")  # Only to place kept lines; taken out again.
 
 
 def _name_lines(person, lines):
@@ -305,7 +317,8 @@ class _Resolver:
 
     def __init__(self, people, families, out, kept_records):
         self.people, self.families, self.out = people, families, out
-        self.kept = {str(n): f"@K{n}@" for n in range(1, kept_records + 1)}
+        # A record a shared copy left at home is an empty list: pointing at it writes nothing.
+        self.kept = {str(n): f"@K{n}@" for n, record in enumerate(kept_records, 1) if record}
 
     def __call__(self, text):
         missing = False
@@ -337,6 +350,7 @@ def _with_kept(chunk, kept, resolve, whole=False):
         root, base = parsed[0], 1
     path = {base - 1: root}
     skip_below = None
+    seen_keys = {}
     for line in kept:
         wrapper = line.startswith("~")
         match = re.match(r"^(\d{1,2}) (.*)$", line[1:] if wrapper else line)
@@ -352,9 +366,33 @@ def _with_kept(chunk, kept, resolve, whole=False):
             continue
         if wrapper:
             tag, _, number = match[2].partition("#")
+            number, _, key = number.partition("=")
             same = [c for c in parent.children if c.tag == tag]
             number = int(number) if number.isdigit() else 1
             node = same[number - 1] if len(same) >= number else None
+            if key.startswith(_REF):
+                # A life event, found by the reference it carries through every edit; one
+                # deleted since takes its details with it, never onto the next event.
+                found = [c for c in same if any(g.tag == "_FT_REF" and g.value == key[len(_REF):] for g in c.children)]
+                if not found:
+                    skip_below = level
+                    continue
+                node = found[0]
+            elif key:
+                wanted = resolve(key)
+                if wanted is None:
+                    skip_below = level  # The family or source it was about is gone: its details too.
+                    continue
+                found = [c for c in same if " ".join(c.value.split()) == " ".join(wanted.split())]
+                taken = seen_keys.setdefault((id(parent), tag, key), 0)
+                seen_keys[(id(parent), tag, key)] += 1
+                if found:
+                    # Two citations of one source (two sources merged since): the one in
+                    # its old place if that still fits, else the next of them in turn.
+                    node = node if node in found else found[min(taken, len(found) - 1)]
+                elif tag != "NAME":  # A citation or family link removed since: its details go with it.
+                    skip_below = level
+                    continue
             if node is None:
                 node = _Node(tag)
                 parent.children.append(node)
@@ -365,6 +403,9 @@ def _with_kept(chunk, kept, resolve, whole=False):
                 skip_below = level  # What it pointed at is gone: leave it and its details out.
                 continue
             node = _Node(parts[3].upper(), parts[4] or "", parts[2])
+            if node.tag in _SINGLE_TAGS and any(c.tag == node.tag for c in parent.children):
+                skip_below = level  # A quality set here since replaces the one kept from the file.
+                continue
             parent.children.append(node)
         path = {k: v for k, v in path.items() if k < level}
         path[level] = node
@@ -407,7 +448,7 @@ def write_gedcom(tree, path, photo_path=None, today=None):
             for member in dict.fromkeys([c["person"] for c in family.children] + list(family.partners)):
                 own_families.setdefault(member, []).append((fid, family))
     kept = [lines_ for lines_ in as_list(tree.extra.get("gedcom_records")) if isinstance(lines_, list)]
-    resolve = _Resolver(people, families, out, len(kept))
+    resolve = _Resolver(people, families, out, kept)
     for pid, person in tree.people.items():
         start = len(lines)
         lines.append(f"0 {people[pid]} INDI")
@@ -433,6 +474,12 @@ def write_gedcom(tree, path, photo_path=None, today=None):
                 lines.append("1 OBJE")
                 lines.append(f"2 FILE {_safe_value(recorded)}")
                 lines.append("3 FORM jpg")
+                kept_title = person.extra.get("photo_title")
+                if isinstance(kept_title, dict) and kept_title.get("file") == person.photo:  # Only while it is that picture.
+                    if kept_title.get("title"):
+                        lines.append(f"2 TITL {_safe_value(kept_title['title'])}")
+                    if isinstance(kept_title.get("ref"), str) and kept_title["ref"]:
+                        lines.append(f"2 _FT_REF {kept_title['ref']}")
         for document in person_documents(person) if photo_path is not None else ():
             recorded = photo_path(document["file"])
             if recorded:
@@ -446,6 +493,8 @@ def write_gedcom(tree, path, photo_path=None, today=None):
                     lines.append(f"2 _FT_DOC_KIND {document['kind']}")
                 if document["date"]:
                     lines.append(f"2 _FT_DOC_DATE {_safe_value(document['date'])}")
+                if document.get("ref"):
+                    lines.append(f"2 _FT_REF {document['ref']}")  # Its kept lines find it by this.
         for fid, family in own_families.get(pid, ()):
             for child in family.children:
                 if child["person"] == pid:
@@ -511,7 +560,7 @@ def write_gedcom(tree, path, photo_path=None, today=None):
         start = len(lines)
         lines.append(f"0 {out.sources[sid]} SOUR")
         if source["title"]:
-            lines.append(f"1 TITL {_safe_value(source['title'])}")
+            _long_text(1, "TITL", source["title"], lines)
         if source["author"]:
             lines.append(f"1 AUTH {_safe_value(source['author'])}")
         if source["repository"]:
@@ -522,6 +571,9 @@ def write_gedcom(tree, path, photo_path=None, today=None):
         lines[start:] = _with_kept(lines[start:], (stored_sources.get(sid) or {}).get("gedcom"), resolve)
     kept_repositories = tree.extra.get("gedcom_repositories")
     kept_repositories = kept_repositories if isinstance(kept_repositories, dict) else {}
+    for name in kept_repositories:
+        if isinstance(name, str) and name:
+            repositories.setdefault(name, f"@R{len(repositories) + 1}@")  # Archives no source cites.
     for name, pointer in repositories.items():
         start = len(lines)
         lines.append(f"0 {pointer} REPO")
@@ -532,6 +584,7 @@ def write_gedcom(tree, path, photo_path=None, today=None):
         lines.extend(_with_kept([], record, resolve, whole=True))
 
     lines.append("0 TRLR")
+    lines = [line for line in lines if not line.startswith("2 _FT_REF ")]
     return "\n".join(lines) + "\n"
 
 
@@ -545,6 +598,8 @@ class _Node:
     pointer: str | None = None
     children: list = field(default_factory=list)
     used: bool = field(default=False, compare=False, repr=False)
+    ref: str = field(default="", compare=False, repr=False)  # A life event's reference.
+    fact: dict | None = field(default=None, compare=False, repr=False)  # The life event read from it.
 
     def first(self, tag):
         node = next((c for c in self.children if c.tag == tag), None)
@@ -594,6 +649,11 @@ def _raw_lines(node, level, out):
         _raw_lines(child, level + 1, out)
 
 
+_KEYED_TAGS = {"NAME", "FAMC", "FAMS", "SOUR"}
+_SINGLE_TAGS = {"QUAY"}
+_REF = "ref:"  # A life event's own reference (event["ref"]), written as "2 _FT_REF <ref>".
+
+
 def _leftovers(node, level=1):
     out, seen = [], {}
     for child in node.children:
@@ -604,7 +664,12 @@ def _leftovers(node, level=1):
         seen[child.tag] = seen.get(child.tag, 0) + 1
         below = _leftovers(child, level + 1)
         if below:
-            out.append(f"~{level} {child.tag}#{seen[child.tag]}")
+            # Names and family links may be written in another order than the file had them:
+            # the way there also says which one by its value, so the lines find it again.
+            key = f"={child.value.strip()}" if child.tag in _KEYED_TAGS and child.value.strip() else ""
+            if child.ref:
+                key = f"={_REF}{child.ref}"
+            out.append(f"~{level} {child.tag}#{seen[child.tag]}{key}")
             out.extend(below)
     return out
 
@@ -712,6 +777,9 @@ def _single_from_gedcom(value, qualifier_allowed=True):
     return stored if parse_date(stored) else None
 
 
+_EXACT_SIDE = re.compile(r"^[0-9]{4}(?:-[0-9]{2}){0,2}$")
+
+
 def date_from_gedcom(text, period=False):
     """Returns the stored form, or None if it cannot be understood. With `period` (a
     residence, a job), FROM ... TO ... is kept as a period; elsewhere it becomes a range."""
@@ -733,11 +801,22 @@ def date_from_gedcom(text, period=False):
             return None
         if re.fullmatch(r"\d{1,2}", match[1]) and re.search(r"[A-Z]{3}", match[2]):
             return None  # "BET 12 AND 19 AUG 1295" means days, not the year 12.
-        stored = f"{start[:4]}/{end[:4]}"
-        return stored if parse_date(stored) else None
+        # Kept exactly ("BET 12 MAY 1880 AND MAY 1880"), or not at all: a range that can't
+        # be held as written (an "about" end, the old calendar, the end before the start)
+        # goes to the notes and its line back out unchanged, never cut to its years.
+        exact = f"{start}/{end}"
+        if _EXACT_SIDE.match(start) and _EXACT_SIDE.match(end) and parse_date(exact):
+            return exact
+        return None
     if value.startswith("FROM ") or value.startswith("TO "):
         return _single_from_gedcom(value.split(" ", 1)[1], False)  # One end of a period, elsewhere.
     return _single_from_gedcom(value)
+
+
+def _clean_lines(text):
+    """Spaces tidied within each line, but the lines kept: a note, a page reference or a
+    cause written over two lines in the file stays on two lines."""
+    return "\n".join(_clean_name_part(line) for line in text.replace("@@", "@").split("\n")).strip("\n")
 
 
 def _clean_name_part(text):
@@ -770,8 +849,13 @@ def _names(record):
     for node in nodes[1:]:
         kind = node.text_of("TYPE").lower()
         if kind == "married":
-            _, married = parts(node)
-            if married and married != surname:
+            married_given, married = parts(node)
+            # The married form of this very name ("Mary Ann" married Jones). A married name
+            # with other given names ("Mary /Jones/") stays one of their other names, as
+            # written: taken as the surname, it would be written back as "Mary Ann /Jones/",
+            # a name the file never had.
+            same_given = not married_given or _clean_name_part(married_given).casefold() == given.casefold()
+            if married and married != surname and same_given:
                 return given, married, surname
         if kind in ("birth", "maiden") and nodes[0].text_of("TYPE").lower() == "married":
             _, born = parts(node)  # The married name first, the birth name after it.
@@ -780,16 +864,24 @@ def _names(record):
     return given, surname, ""
 
 
+_DMS = re.compile(r"^([NSEW])?\s*(-?\d+(?:\.\d+)?)(?:[°\s:]+(\d+(?:\.\d+)?)(?:['′\s:]+(\d+(?:\.\d+)?)[\"″]?)?['′]?)?\s*([NSEW])?$")
+
+
 def _degrees(text):
-    """N43.5167, S12.5, 43.5167 or -12.5 as a number; None when not one."""
+    """N43.5167, S12.5, 43.5167, -12.5, and the degrees-and-minutes some programs write
+    (N47°04', 47°04'30"N) as a number; None when not one."""
     text = text.strip().upper().replace(",", ".")
-    if not text:
+    match = _DMS.match(text)
+    if not text or match is None or (match[1] and match[5]):
         return None
-    sign = -1 if text[0] in "SW" else 1
-    try:
-        return sign * float(text[1:] if text[0] in "NSEW" else text)
-    except ValueError:
+    value = float(match[2])
+    minutes, seconds = float(match[3] or 0), float(match[4] or 0)
+    if minutes >= 60 or seconds >= 60 or ((match[3] or match[4]) and "." in match[2]):
         return None
+    value = abs(value) + minutes / 60 + seconds / 3600 if (match[3] or match[4]) else value
+    if match[3] and match[2].startswith("-"):
+        value = -value
+    return -value if (match[1] or match[5]) in ("S", "W") else value
 
 
 class _Sources:
@@ -817,9 +909,9 @@ class _Sources:
         if repository is not None:
             where = self.repositories.get(repository.value.strip()) or _clean_name_part(repository.text_of("NAME")
                                                                                          or repository.value)
-        title = _clean_name_part(record.text_of("TITL") or record.value) or pointer.strip("@")
+        title = _clean_lines(record.text_of("TITL") or record.value) or pointer.strip("@")
         return self._add(pointer, {"title": title, "author": _clean_name_part(record.text_of("AUTH")),
-                                   "repository": where, "note": record.text_of("NOTE").strip()})
+                                   "repository": where, "note": _written_note(record).strip()})
 
     def place(self, node):
         """A PLAC line's place, keeping MAP coordinates (N43.5167 / E16.2500) as a place record."""
@@ -828,9 +920,18 @@ class _Sources:
         point = plac.first("MAP") if plac is not None else None
         if name and point is not None:
             lat, lon = _degrees(point.text_of("LATI")), _degrees(point.text_of("LONG"))
+            places = self.tree.extra.setdefault("places", {})
+            known = places.get(name, {})
             if lat is not None and lon is not None and -90 <= lat <= 90 and -180 <= lon <= 180:
-                places = self.tree.extra.setdefault("places", {})
-                places.setdefault(name, {}).update({"lat": lat, "lon": lon})
+                if "lat" not in known:  # The first coordinates given for a place are its own.
+                    places.setdefault(name, {}).update({"lat": lat, "lon": lon})
+            else:
+                # Coordinates we cannot read: kept as written, so they go back out unchanged.
+                for node in (point, point.peek("LATI"), point.peek("LONG")):
+                    if node is not None:
+                        node.used = False
+            if not places:
+                self.tree.extra.pop("places")
         return name
 
     def cite(self, node):
@@ -847,7 +948,7 @@ class _Sources:
                 continue
             entry = {"source": source_id}
             if source.text_of("PAGE"):
-                entry["page"] = _clean_name_part(source.text_of("PAGE"))
+                entry["page"] = _clean_lines(source.text_of("PAGE"))
             quay = source.peek("QUAY")
             if quay is not None:
                 quality = QUAY_TO_QUALITY.get(quay.value.strip())
@@ -877,7 +978,9 @@ def _role(node):
             rela.used = True  # Our own word for it, written again with the role.
         return own
     words = f"{node.text_of('RELA')} {node.text_of('ROLE')}".lower()
-    for role, keys in (("godmother", ("godmother", "kuma", "godp")), ("godfather", ("godfather", "kum", "sponsor")),
+    # "Godparent" says neither: it stays a godparent, whatever the person's sex.
+    for role, keys in (("godparent", ("godparent", "godp")), ("godmother", ("godmother", "kuma")),
+                       ("godfather", ("godfather", "kum", "sponsor")),
                        ("witness", ("witn", "svjedo")), ("priest", ("priest", "clergy", "officiat", "župnik")),
                        ("informant", ("inform",)), ("midwife", ("midwife", "babica"))):
         if any(key in words for key in keys):
@@ -919,7 +1022,7 @@ def _details(node, notes, label, sources, period=False):
     if people:
         event["people"] = people
     for key, tag in (("age", "AGE"), ("cause", "CAUS"), ("address", "ADDR")):
-        text = _clean_name_part(node.text_of(tag))
+        text = _clean_lines(node.text_of(tag))
         if text:
             event[key] = text
     return event
@@ -960,7 +1063,7 @@ def _other_names_from(record, sources, main_given, main_surnames):
         kind = own_type if own_type in NAME_TYPE_WORDS else (
             "married" if "married" in word.lower() else "birth" if word.lower() in ("birth", "maiden", "birthname")
             else "other")
-        if node.first("NICK") is not None and not own_type:
+        if node.peek("NICK") is not None and not own_type:  # The nickname itself kept as written.
             kind = "nickname"
         entry = {"given": given, "surname": surname, "type": kind}
         if word and word != NAME_TYPE_WORDS[kind]:
@@ -1052,7 +1155,7 @@ def _events_from(record, notes, sources):
         if node.tag in ("BARM", "BASM", "BLES", "CAST", "IDNO", "SSN", "NCHI", "NMR", "FACT") \
                 and node.peek("TYPE") is not None:
             node.peek("TYPE").used = False  # Written back as it was; the tag says what it is.
-        text = node.full_text().strip() or node.text_of("NOTE")  # With its CONC/CONT lines.
+        text = node.full_text().strip() or _written_note(node)  # With its CONC/CONT lines.
         if text:
             details["text_on"] = "line" if node.full_text().strip() else "note"
         if node.tag == "EVEN":
@@ -1061,13 +1164,25 @@ def _events_from(record, notes, sources):
             if label and label != EVEN_TYPES.get(kind):
                 details["label"] = label
         event = {"type": kind, "date": details["date"]}
-        for key, value in (("place", details["place"]), ("text", _clean_name_part(text))):
+        for key, value in (("place", details["place"]), ("text", _clean_lines(text))):
             if value:
                 event[key] = value
         event.update({k: details[k] for k in ("citations", "people", "age", "cause", "address", "tag", "label",
                                               "text_on") if k in details})
+        node.fact = event  # Given a reference later if lines under it are kept (_keep_the_rest).
         events.append(event)
     return events
+
+
+def _written_note(node):
+    """The first note written out under this line. A pointer to a shared note (NOTE @N2@)
+    is not text: it stays unread, so it is kept as written and goes back out pointing at
+    the same note, instead of becoming the words "@N2@"."""
+    for child in node.children:
+        if child.tag == "NOTE" and not _POINTER.fullmatch(child.value.strip()):
+            child.used = True
+            return child.full_text()
+    return ""
 
 
 def _note_text(record, shared_notes, refs=None):
@@ -1108,38 +1223,115 @@ def _living_status(record, birth, today):
 PICTURE_TYPES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 
 
-def _media_references(record, base_folder, shared_objects):
-    """Files the record points to, only those inside the GEDCOM's own folder: the first
-    picture is the portrait, the rest are documents.
+def _media_file(base_folder, value):
+    """The file a FILE line names, if it is inside the GEDCOM's own folder and there.
+    GEDCOM 7 writes FILE as a URL, so "my%20photo.jpg" is tried decoded too."""
+    if not value or _is_web_link(value):
+        return None
+    if re.match(r"^[A-Za-z]:/|^file://|^//", value, re.IGNORECASE) or Path(value).is_absolute():
+        # Where it was on the other person's computer ("C:/Users/Ana/Pictures/b.jpg"): never
+        # read from there, but found by its name beside the GEDCOM, or in a folder there,
+        # as the message about missing photos advises.
+        name = urllib.parse.unquote(value.rsplit("/", 1)[-1])
+        root = base_folder.resolve()
+        for candidate in [base_folder / name] + sorted(base_folder.glob(f"*/{glob.escape(name)}")):
+            resolved = candidate.resolve()
+            if name and resolved.is_relative_to(root) and resolved.is_file():
+                return resolved
+        return None
+    for candidate in dict.fromkeys((value, urllib.parse.unquote(value))):
+        resolved = (base_folder / candidate).resolve()
+        if resolved.is_relative_to(base_folder.resolve()) and resolved.is_file():
+            return resolved
+    return None
 
-    Returns (photo path or None, [(document path, title, kind, date)], whether any file was mentioned).
+
+def _is_web_link(value):
+    """A web address or an e-mail address: never a file that could have been beside the GEDCOM."""
+    return bool(re.match(r"^(https?|ftp|mailto):", value, re.IGNORECASE)) or (
+        "@" in value and "/" not in value and "." in value.split("@")[-1])
+
+
+def _media_references(record, base_folder, shared_objects):
+    """Files the record points to, only those inside the GEDCOM's own folder: the picture
+    marked as the main one (_PRIM Y, or the one _PHOTO points to), else the first picture,
+    is the portrait; the rest are documents.
+
+    Returns (photo path or None, [(document path, title, kind, date)], files mentioned but
+    not found or not inside the folder). A file not copied in keeps its line, so it goes
+    back out as it came.
     """
-    mentioned, photo, documents = False, None, []
+    missing, found = 0, []  # found: (path, title, kind, date, main, a document by choice)
+    main_pointer = record.peek("_PHOTO").value.strip() if record.peek("_PHOTO") else ""
+    if main_pointer:
+        record.peek("_PHOTO").used = True
     for node in record.all("OBJE"):
         source = shared_objects.get(node.value.strip(), node)
-        found_before = (photo, len(documents))
         title = source.text_of("TITL")
+        document = bool(source.text_of("_FT_DOC"))
+        kind, date = source.text_of("_FT_DOC_KIND"), source.text_of("_FT_DOC_DATE")
+        main = source.text_of("_PRIM").upper().startswith("Y") or (main_pointer and node.value.strip() == main_pointer)
+        if source.peek("FORM") is not None:
+            source.first("FORM")  # GEDCOM 5.5's place for it: written again, under FILE.
+        if source.peek("_CUTOUT") is not None:
+            source.peek("_CUTOUT").used = False  # Kept as written: not ours to say.
+        copied = left = 0
         for file_node in source.all("FILE"):
             value = file_node.value.replace("@@", "@").replace("\\", "/").strip()
-            mentioned = mentioned or bool(value)
-            if not value or re.match(r"^[A-Za-z]:/|^[a-z]+://", value) or Path(value).is_absolute():
+            if file_node.peek("FORM") is not None:
+                file_node.first("FORM")  # Written again with the file.
+            resolved = _media_file(base_folder, value)
+            if resolved is None:
+                file_node.used = False  # Kept as written: a web link, a missing file.
+                left += 1
+                if value and not _is_web_link(value):
+                    missing += 1
                 continue
-            resolved = (base_folder / value).resolve()
-            if not (resolved.is_relative_to(base_folder.resolve()) and resolved.is_file()):
-                continue
-            if photo is None and resolved.suffix.lower() in PICTURE_TYPES and not source.text_of("_FT_DOC"):
-                photo = resolved
-            else:
-                kind = source.text_of("_FT_DOC_KIND")
-                documents.append((resolved, title or file_node.text_of("TITL"),
-                                  kind if kind in DOCUMENT_KINDS else "", source.text_of("_FT_DOC_DATE")))
-        if (photo, len(documents)) == found_before:
-            node.used = False  # Nothing copied in (a web link, a missing file): keep the line.
+            copied += 1
+            if source is node and not node.ref:
+                # Lines kept under this picture follow it by this reference, wherever it is
+                # written: the portrait goes first, whatever its place in the file was.
+                node.ref = uuid.uuid4().hex[:10]
+            found.append((resolved, title or file_node.text_of("TITL"), kind if kind in DOCUMENT_KINDS else "",
+                          date, main, document, node.ref if source is node else ""))
+        if not copied:
+            node.used = False  # Nothing copied in: keep the line as it was.
             if source is not node:
                 source.used = False
         elif source is not node:
-            source.used = True
-    return photo, documents, mentioned
+            # A shared record: copied files are ours now; if some of its files were not,
+            # the whole record is kept too, so none of them is lost.
+            source.used = not left
+            node.used = not left
+    pictures = [entry for entry in found if entry[0].suffix.lower() in PICTURE_TYPES and not entry[5]]
+    portrait = next((entry for entry in pictures if entry[4]), pictures[0] if pictures else None)
+    documents = [entry[:4] + (entry[6],) for entry in found if entry is not portrait]
+    if portrait is not None and (portrait[1] or portrait[6]) and record.tag == "INDI":
+        # "Ana in 1950", and where its kept lines belong: kept with the portrait.
+        _portrait_titles[id(record)] = (portrait[1], portrait[6])
+    return (portrait[0] if portrait else None), documents, missing
+
+
+_portrait_titles = {}  # Record -> the portrait's title, while one file is read.
+
+
+def _fact_media(node, base_folder, shared_objects, documents, owners):
+    """The files on a fact or a family, as documents of `owners`. Returns how many named
+    files were not found."""
+    photo, found, missing = _media_references(node, base_folder, shared_objects)
+    found = ([(photo, "", "", "")] if photo else []) + found
+    for obje in node.children:
+        # A date or note under a picture on an event can't go with the document (it is
+        # written with the person, not the event): the picture's lines are kept as written
+        # too, so nothing of them is lost.
+        if obje.tag == "OBJE" and any(c.tag not in ("FILE", "TITL", "FORM") for c in obje.children):
+            obje.used = False
+    for owner in owners:
+        known = {entry[0] for entry in documents.get(owner, [])}
+        documents.setdefault(owner, []).extend(entry for entry in found if entry[0] not in known)
+        if not documents[owner]:
+            del documents[owner]
+    return missing
 
 
 def _ftm_link(child_node, link):
@@ -1187,6 +1379,13 @@ def _keep_the_rest(records, tree, sources, person_ids, family_ids, note_refs=Non
             owners[id(record)] = tree.families[family_ids[record.pointer]].extra
         elif record.tag == "SOUR" and record.pointer in sources.ids:
             owners[id(record)] = tree.extra["sources"][sources.ids[record.pointer]]
+    for record in records:
+        if record.tag == "INDI" and id(record) in owners:
+            for child in record.children:
+                if child.fact is not None and _leftovers(child, 2):
+                    # Lines kept under a life event follow it by this reference, not by its
+                    # place in the list: deleting the event before must not hand them on.
+                    child.ref = child.fact["ref"] = uuid.uuid4().hex[:10]
     kept_lines = {}
     for record in records:
         if id(record) in owners:
@@ -1198,7 +1397,7 @@ def _keep_the_rest(records, tree, sources, person_ids, family_ids, note_refs=Non
         if record.tag == "REPO" and record.pointer:
             name = sources.repositories.get(record.pointer)
             lines = _leftovers(record)
-            if name and lines:
+            if name:  # Every archive, even one no source points to yet: it is written back too.
                 repositories[name] = lines
     # Whole records: what no person, family or source used, and what the kept lines point to.
     pointed = {m[0] for lines in [*kept_lines.values(), *repositories.values()] for line in lines
@@ -1323,17 +1522,22 @@ def read_gedcom(path, today=None):
                         main_name.peek(part).used = False
         tree.people[person.id] = person
         person_ids[record.pointer] = person.id
-        photo, found_documents, mentioned = _media_references(record, path.parent, shared_objects)
+        photo, found_documents, missing = _media_references(record, path.parent, shared_objects)
         if photo:
             photos[person.id] = photo
+            title, ref = _portrait_titles.pop(id(record), ("", ""))
+            if title or ref:  # Its file is set once copied in.
+                person.extra["photo_title"] = {k: v for k, v in (("title", title), ("ref", ref)) if v}
         if found_documents:
             documents[person.id] = found_documents
-        if mentioned and not photo and not found_documents:
-            skipped_photos += 1
+        skipped_photos += missing  # Each file, even when another of the same person was found.
+        # Pictures and scans on one of their facts (a baptism record on the baptism): theirs
+        # too, among their documents; a picture there is no portrait.
+        for node in record.children:
+            if node.tag != "OBJE" and node.peek("OBJE") is not None:
+                skipped_photos += _fact_media(node, path.parent, shared_objects, documents, [person.id])
     if odd_dates:
         warnings.append(("odd_dates", odd_dates))
-    if skipped_photos:
-        warnings.append(("photos_skipped", skipped_photos))
 
     links, explicit = {}, set()
     for record in records:
@@ -1346,6 +1550,10 @@ def read_gedcom(path, today=None):
             else:
                 pedi = node.text_of("PEDI").lower()
                 link = pedi if pedi in ("birth", "adopted", "foster") else ("unknown" if pedi else "birth")
+                if link == "unknown":
+                    # "step", "sealing", 7.0's OTHER with its PHRASE: none of ours, so the
+                    # line is kept as written and goes back out as it came.
+                    node.peek("PEDI").used = False
             links[(person_ids[record.pointer], node.value.strip())] = link
             if node.peek("PEDI") is not None or node.peek("_FT_LINK") is not None:
                 explicit.add((person_ids[record.pointer], node.value.strip()))
@@ -1399,8 +1607,14 @@ def read_gedcom(path, today=None):
             tree.families[family.id] = family
             if record.pointer:
                 family_ids[record.pointer] = family.id
+            # A wedding photo or certificate on the family, or on its marriage: both partners'.
+            for node in [record] + [n for n in record.children if n.tag != "OBJE" and n.peek("OBJE") is not None]:
+                if node.peek("OBJE") is not None and family.partners:
+                    skipped_photos += _fact_media(node, path.parent, shared_objects, documents, family.partners)
         else:
             record.used = False  # Nobody in it is in the file: kept as written, with its details.
+    if skipped_photos:
+        warnings.append(("photos_skipped", skipped_photos))
     _resolve_people(tree, person_ids)
     _keep_the_rest(records, tree, sources, person_ids, family_ids, note_refs)
     if broken:

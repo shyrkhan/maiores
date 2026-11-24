@@ -99,6 +99,12 @@ def make_deb(dist):
     )
     folder("usr/share/applications")
     entries.append((f"./usr/share/applications/{NAME}.desktop", desktop.encode(), 0o644, None))
+    # Where Debian looks for a package's licences: Maiores's own, and everything bundled.
+    folder(f"usr/share/doc/{NAME}")
+    copyright_text = ("Maiores\nLicence: GNU General Public License version 3 or later; the full text is in\n"
+                      "/usr/share/common-licenses/GPL-3 and at https://www.gnu.org/licenses/gpl-3.0.html\n\n"
+                      + (ROOT / "THIRD_PARTY.txt").read_text(encoding="utf-8"))
+    entries.append((f"./usr/share/doc/{NAME}/copyright", copyright_text.encode("utf-8"), 0o644, None))
     from PIL import Image
     icon = Image.open(ROOT / "assets" / "icon.png")
     for size in (48, 64, 128, 256, 512):  # Each size the desktop may ask for.

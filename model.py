@@ -5,6 +5,8 @@ written back, so a future version's data survives being opened by this one.
 """
 import calendar
 import contextlib
+import datetime
+import functools
 import re
 import unicodedata
 import uuid
@@ -62,10 +64,13 @@ class ParsedDate:
 
 # Stored dates, one spelling each (so two copies of a date always compare equal):
 #   1921   1921-05   1921-05-14   abt 1921   bef 1900   aft 1900   1880/1885 (between)
+#   1880-05-12/1880-05-19 (between two exact dates)
 #   1708/09-02-10 (double-dated year)   1708-02-10 julian   abt 1708 julian
 #   from 1950   to 1960   from 1950 to 1960   from 1700 julian to 1710 julian (periods)
 _CORE = re.compile(r"^([0-9]{4})(?:/([0-9]{2}))?(?:-([0-9]{2})(?:-([0-9]{2}))?)?$")
-_RANGE_DATE = re.compile(r"^([0-9]{4})/([0-9]{4})$")  # Stored dates use 0-9 only, never other scripts' digits.
+# A range: two years, or two exact dates (1880-05-12/1880-05-19). Stored dates use 0-9
+# only, never other scripts' digits.
+_RANGE_DATE = re.compile(r"^([0-9]{4}(?:-[0-9]{2}){0,2})/([0-9]{4}(?:-[0-9]{2}){0,2})$")
 
 
 def _days_in(year, month, julian):
@@ -103,12 +108,24 @@ def _parse_single(text):
 
 def parse_date(text):
     """Return a ParsedDate, or None if the text is empty or not understood."""
-    if not text:
+    if not text or not isinstance(text, str):  # A hand-edited file may hold 1925, not "1925".
         return None
+    return _parse_date(text)
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _parse_date(text):
+    """Remembered (a ParsedDate can't be changed): the duplicate finder reads the same
+    dates millions of times."""
     match = _RANGE_DATE.match(text)
     if match:
-        start, end = int(match[1]), int(match[2])
-        return ParsedDate(start, end_year=end) if start <= end else None
+        start, end = _parse_single(match[1]), _parse_single(match[2])
+        # The end may be less exact than the start (12 May 1880 to May 1880): it only has to
+        # be able to fall on or after it.
+        if start is None or end is None or _last_day(end) < _first_day(start):
+            return None
+        exact = start.month is not None or end.month is not None
+        return ParsedDate(start.year, start.month, start.day, end_year=end.year, end=end if exact else None)
     if text.startswith("from "):
         first, separator, second = text[5:].partition(" to ")
         start = _parse_single(first)
@@ -141,6 +158,8 @@ _TO_WORDS = ("to", "until", "till", "do")
 _DOTTED_FULL = re.compile(r"^(\d{1,2})\s*\.\s*(\d{1,2})\s*\.\s*(\d{4}(?:/\d{1,2})?)$")
 _DOTTED_MONTH = re.compile(r"^(\d{1,2})\s*\.\s*(\d{4}(?:/\d{1,2})?)$")
 _ANY_RANGE = re.compile(r"^(\d{4})\s*[-/–]\s*(\d{4})$")
+_RANGE_SIDE = r"(?:\d{1,2}\s*\.\s*){1,2}\d{4}|\d{4}"
+_EXACT_RANGE = re.compile(rf"^({_RANGE_SIDE})\s*[-–]\s*({_RANGE_SIDE})$")  # 12.5.1880-19.5.1880
 _DUAL_YEAR = re.compile(r"^(\d{4})/(\d{1,2})")
 
 
@@ -164,12 +183,21 @@ def _qualifier_words():
     import strings
     found = set()
     for table in strings.STRINGS.values():
-        for key, stored in (("date_word_about", "abt"), ("date_word_before", "bef"), ("date_word_after", "aft")):
-            template = table.get(key, "")
-            if "{date}" in template:
-                before, after = template.lower().split("{date}", 1)
+        # The words for typing, and the words the program itself shows ("1921 年頃"):
+        # what is shown must read back.
+        for key, stored, slot in (("date_word_about", "abt", "{date}"), ("date_word_before", "bef", "{date}"),
+                                  ("date_word_after", "aft", "{date}"), ("date_about", "abt", "{year}"),
+                                  ("date_before", "bef", "{year}"), ("date_after", "aft", "{year}")):
+            template = table.get(key, "").replace("年", "").replace("년", "")
+            if slot in template:
+                before, after = template.lower().split(slot, 1)
                 if before.strip() or after.strip():
                     found.add((before.strip(), after.strip(), stored))
+    # Everyday words beyond the program's own: "environ 1921", "约1921年", "1921年之前".
+    found.update({("environ", "", "abt"), ("vers", "", "abt"), ("大约", "", "abt"), ("约", "", "abt"),
+                  ("", "頃", "abt"), ("", "之前", "bef"), ("", "以前", "bef"), ("", "之后", "aft"),
+                  ("", "以後", "aft"), ("", "以降", "aft"), ("약", "", "abt"), ("", "이전", "bef"),
+                  ("", "이후", "aft")})
     # Longest first, so "vor dem" wins over "vor".
     return sorted(found, key=lambda item: -len(item[0]) - len(item[1]))
 
@@ -278,9 +306,24 @@ def normalize_date_input(text):
     if not value:
         return ""
     value = value.rstrip(".").strip()
-    match = _ANY_RANGE.match(re.sub(r"(\d{4})\.\s*-", r"\1-", value))  # "1880.-1885." as written in Croatian.
+    # Turkish endings as each number takes them (1960'tan, 1960'a, 1950'ye): read as the
+    # one form the templates hold.
+    value = re.sub(r"(\d)'[dt][ea]n\b", r"\1'den", value)
+    value = re.sub(r"(\d)'y?[ea](?=\s|$)", r"\1'e", value)
+    # "1921年", "1921년": the year written with its own word, as cards in Japanese,
+    # Chinese and Korean show it ("1921 年頃").
+    value = re.sub(r"(\d)\s*[年년](?!\d)", r"\1", value).strip()
+    ranged = re.sub(r"(\d{4})\.\s*-", r"\1-", value)  # "1880.-1885." as written in Croatian.
+    match = _ANY_RANGE.match(ranged)
     if match:
         stored = f"{match[1]}/{match[2]}"
+        return stored if parse_date(stored) else None
+    match = _EXACT_RANGE.match(ranged)
+    if match:
+        start, end = _normalize_single(match[1]), _normalize_single(match[2])
+        if start is None or end is None or not _CORE.match(start) or not _CORE.match(end):
+            return None
+        stored = f"{start}/{end}"
         return stored if parse_date(stored) else None
     whole, julian = _strip_julian(value)  # "from 1700 to 1710 (Julian)": both ends are Julian.
     parts = _period_parts(whole)
@@ -326,6 +369,8 @@ def date_input_text(stored):
     parsed = parse_date(stored)
     if parsed is None:
         return stored or ""
+    if parsed.end_year is not None and parsed.end is not None:
+        return f"{_core_text(replace(parsed, end=None, end_year=None))}-{_core_text(parsed.end)}"
     if parsed.end_year is not None:
         return f"{parsed.year:04d}-{parsed.end_year:04d}"  # The form the parser reads in every language.
     if parsed.qualifier == "from":
@@ -343,6 +388,9 @@ def date_label(text):
     parsed = parse_date(text)
     if parsed is None:
         return text or t("date_unknown")
+    if parsed.end_year is not None and parsed.end is not None:
+        return t("date_between", start=_core_text(replace(parsed, end=None, end_year=None)),
+                 end=_core_text(parsed.end))
     if parsed.end_year is not None:
         return t("date_between", start=parsed.year, end=parsed.end_year)
     year = _year_text(parsed)
@@ -680,15 +728,24 @@ class TreeIndex:
     def families_of(self, person_id):
         return self._partner_of.get(person_id, [])
 
+    @staticmethod
+    def _parent_order(pair):
+        """Birth first; then a link not known to be adoptive or foster; and among equals the
+        family that knows more parents (one record knew only the mother, another both):
+        never the order the families happen to be stored in."""
+        family, child = pair
+        link = child.get("link", "birth")
+        return (link != "birth", link in ("adopted", "foster"), -len(family.partners))
+
     def birth_family_of(self, person_id):
         entries = self._child_of.get(person_id)
         if not entries:
             return None
-        return min(entries, key=lambda pair: pair[1].get("link") != "birth")[0]
+        return min(entries, key=self._parent_order)[0]
 
     def parent_families(self, person_id):
         entries = self._child_of.get(person_id, [])
-        ordered = sorted(entries, key=lambda pair: pair[1].get("link") != "birth")
+        ordered = sorted(entries, key=self._parent_order)
         return [(family, child.get("link", "unknown")) for family, child in ordered]
 
 
@@ -718,9 +775,12 @@ def person_documents(person):
     found = []
     for item in as_list(person.extra.get("documents")):
         if isinstance(item, dict) and isinstance(item.get("file"), str) and item["file"]:
-            found.append({"file": item["file"], "title": str(item.get("title") or ""),
-                          "kind": item.get("kind") if item.get("kind") in DOCUMENT_KINDS else "other",
-                          "date": str(item.get("date") or ""), "private": bool(item.get("private"))})
+            entry = {"file": item["file"], "title": str(item.get("title") or ""),
+                     "kind": item.get("kind") if item.get("kind") in DOCUMENT_KINDS else "other",
+                     "date": str(item.get("date") or ""), "private": bool(item.get("private"))}
+            if isinstance(item.get("ref"), str) and re.fullmatch(r"[0-9a-f]{6,32}", item["ref"]):
+                entry["ref"] = item["ref"]  # Where lines kept from another program's file belong.
+            found.append(entry)
     return found
 
 
@@ -755,8 +815,7 @@ def validate(tree):
                 issues.append(Issue("bad_date", name))
         if person.death is not None and person.living == "yes":
             issues.append(Issue("dead_marked_living", name))
-        birth, death = parse_date(person.birth_date), parse_date(person.death_date)
-        if birth and death and (death.end_year or death.year) < birth.year:
+        if died_before_born(person.birth_date, person.death_date):
             issues.append(Issue("death_before_birth", name))
         if any(event["date"] and parse_date(event["date"]) is None for event in person_events(person)):
             issues.append(Issue("bad_date", name))
@@ -892,11 +951,63 @@ def _people_in_ancestor_loops(tree):
     return [person for person in tree.people if person in looping]
 
 
+# Letters with no accent to strip ("đ" is not "d" plus a mark). The shared web page folds
+# with the same table.
+FOLD_LETTERS = {"đ": "d", "ł": "l", "ø": "o", "æ": "ae", "œ": "oe", "ß": "ss", "ı": "i", "þ": "th", "ð": "d"}
+
+
+@functools.lru_cache(maxsize=1 << 16)
 def fold_text(text):
-    """Lower case without accents, so "simic" finds Šimić and "dakovic" finds Đaković."""
-    text = text.lower().replace("đ", "d")
+    """Lower case without accents, so "simic" finds Šimić and "dakovic" finds Đaković.
+    Remembered: the duplicate finder folds the same few thousand names millions of times."""
+    text = text.lower()
+    for letter, plain in FOLD_LETTERS.items():
+        text = text.replace(letter, plain)
     decomposed = unicodedata.normalize("NFKD", text)
     return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _first_day(date):
+    return date.year, date.month or 1, date.day or 1
+
+
+def _last_day(date):
+    month = date.month or 12
+    return date.year, month, date.day or _days_in(date.year, month, date.calendar == "julian")
+
+
+def _day_bounds(parsed):
+    """The earliest and latest day a parsed date can mean, as (year, month, day); None
+    where it is open ("before 1900" has no earliest day)."""
+    first, last = _first_day, _last_day
+    if parsed.end_year is not None:
+        return first(parsed), last(parsed.end or ParsedDate(parsed.end_year))
+    if parsed.qualifier == "bef":
+        return None, first(parsed)
+    if parsed.qualifier == "aft":
+        return last(parsed), None
+    if parsed.qualifier == "abt":  # A couple of years either way, as _year_bounds reads it.
+        return (parsed.year - 2, 1, 1), (parsed.year + 2, 12, 31)
+    if parsed.qualifier == "from":
+        return first(parsed), last(parsed.end) if parsed.end else None
+    if parsed.qualifier == "to":
+        return None, last(parsed)
+    return first(parsed), last(parsed)
+
+
+def died_before_born(birth_text, death_text):
+    """True only when the death is before the birth however the dates are read: "born
+    before 1900, died 1880" is possible; born 31.12.1900, died 1.1.1900 is not."""
+    birth, death = parse_date(birth_text or ""), parse_date(death_text or "")
+    if birth is None or death is None:
+        return False
+    born_early, _born_late = _day_bounds(birth)
+    _died_early, died_late = _day_bounds(death)
+    if born_early is None or died_late is None:
+        return False
+    if birth.calendar != death.calendar:  # Old and new calendar days differ: compare years only.
+        return died_late[0] < born_early[0]
+    return died_late < born_early
 
 
 def _year_bounds(text):
@@ -919,10 +1030,48 @@ def _year_bounds(text):
     return parsed.year, parsed.year
 
 
+_QUALIFIER_ORDER = {"bef": 0, "to": 0, "abt": 1, None: 2, "from": 2, "aft": 3}
+_KIND_ORDER = {"birth": 0, "baptism": 1, "death": 3, "burial": 4, "cremation": 4}
+
+
+def date_sort_key(text, kind=""):
+    """Sorts facts by when they happened: "about 1921" in 1921, "before 1900" ahead of
+    "1900" and "after 1900" behind 1.6.1900; on the same day a birth before a baptism,
+    a death before a burial. Unknown dates last."""
+    parsed = parse_date(text or "")
+    order = _KIND_ORDER.get(kind, 2)
+    if parsed is None:
+        return (10 ** 6, 0, 0, 0, order, kind)
+    return (parsed.year, _QUALIFIER_ORDER.get(parsed.qualifier, 2), parsed.month or 0, parsed.day or 0, order, kind)
+
+
+MOTHER_OLDEST, FATHER_OLDEST, OLDEST = 60, 90, 110  # Ages beyond which a date must be wrong.
+
+
+def _days_between(early_text, late_text):
+    """The fewest days from the first date to the second however both are read (negative:
+    the second can be before the first); None when either is open or unknown. Dates in
+    two calendars are compared by year, as 365 days to a year."""
+    first, second = parse_date(early_text or ""), parse_date(late_text or "")
+    if first is None or second is None:
+        return None
+    _first_early, first_late = _day_bounds(first)
+    second_early, _second_late = _day_bounds(second)
+    if first_late is None or second_early is None:
+        return None
+    if first.calendar != second.calendar:
+        return (second_early[0] - first_late[0]) * 365
+    try:
+        return datetime.date(*second_early).toordinal() - datetime.date(*first_late).toordinal()
+    except ValueError:  # A year before 1: by years.
+        return (second_early[0] - first_late[0]) * 365
+
+
 def date_warnings(tree, person_id, today, index=None):
     """Dates that cannot all be right. Warnings only: old records are often uncertain.
 
-    Each rule fires only when it is wrong however the uncertain dates are read.
+    Each rule fires only when it is wrong however the uncertain dates are read, to the
+    day where the dates give days.
     """
     index = index or TreeIndex(tree)  # Pass one in when checking many people.
     person = tree.people[person_id]
@@ -936,29 +1085,45 @@ def date_warnings(tree, person_id, today, index=None):
             parent = tree.people.get(parent_id)
             if parent is None:
                 continue
-            p_early, _p_late = _year_bounds(parent.birth_date)
+            p_early, p_late = _year_bounds(parent.birth_date)
             if p_early is not None and born_late is not None and p_early + 12 > born_late:
                 warnings.append(t("warn_parent_too_young", parent=parent.display_name, child=name))
-            _d_early, d_late = _year_bounds(parent.death_date)
-            grace = 0 if parent.sex == "F" else 1
-            if d_late is not None and born_early is not None and born_early > d_late + grace:
+            oldest = MOTHER_OLDEST if parent.sex == "F" else FATHER_OLDEST
+            if p_late is not None and born_early is not None and born_early - p_late > oldest:
+                warnings.append(t("warn_parent_too_old", parent=parent.display_name, child=name, age=oldest))
+            # A mother cannot give birth after she died; a father's child can be born up to
+            # about ten months after his death.
+            gap = _days_between(parent.death_date, person.birth_date)
+            if gap is not None and gap > (0 if parent.sex == "F" else 300):
                 warnings.append(t("warn_born_after_parent_died", parent=parent.display_name, child=name))
     # Found by the MCP sweep: a birth in 2090 was taken without a word. A year after this one
     # cannot be right, however the date is read.
     if born_early is not None and born_early > today.year:
         warnings.append(t("warn_born_future", name=name, year=born_early))
+    if died_before_born(person.birth_date, person.death_date):
+        warnings.append(t("issue.death_before_birth", detail=name))
     died_early, _died_late = _year_bounds(person.death_date)
     if died_early is not None and died_early > today.year:
         warnings.append(t("warn_died_future", name=name, year=died_early))
-    if person.living == "yes" and born_late is not None and today.year - born_late > 110:
+    if person.living == "yes" and born_late is not None and today.year - born_late > OLDEST:
         warnings.append(t("warn_too_old", name=name, age=today.year - born_late))
+    if died_early is not None and born_late is not None and died_early - born_late > OLDEST:
+        warnings.append(t("warn_died_too_old", name=name, age=died_early - born_late))
+    married_early = False
     for family in index.families_of(person_id):
+        if person_id not in family.partners:
+            continue
+        marriage = family.extra.get("marriage") if isinstance(family.extra.get("marriage"), dict) else {}
+        gap = _days_between(marriage.get("date"), person.birth_date)
+        if gap is not None and gap > 0 and not married_early:
+            married_early = True
+            warnings.append(t("warn_married_before_born", name=name))
         for partner_id in family.partners:
             partner = tree.people.get(partner_id)
             if partner is None or partner_id == person_id:
                 continue
-            _d_early, d_late = _year_bounds(partner.death_date)
-            if d_late is not None and born_early is not None and born_early > d_late:
+            gap = _days_between(partner.death_date, person.birth_date)
+            if gap is not None and gap > 0:
                 warnings.append(t("warn_born_after_partner_died", name=name, partner=partner.display_name))
     return warnings
 
@@ -978,7 +1143,7 @@ EVENT_FIELDS = ("type", "date", "place", "text")
 #   "people":    [{"person": person id or "", "name": "as written", "role": ...}]
 # Sources themselves live once in the tree: tree.extra["sources"] = {id: {"title", ...}}.
 CITATION_QUALITIES = ("original", "copy", "family", "unknown")
-ROLES = ("godfather", "godmother", "witness", "priest", "informant", "midwife", "other")
+ROLES = ("godfather", "godmother", "godparent", "witness", "priest", "informant", "midwife", "other")
 NAME_TYPES = ("birth", "married", "nickname", "latin", "other")
 SOURCE_FIELDS = ("title", "author", "repository", "note")
 
@@ -1031,6 +1196,8 @@ def fact_details(fact):
                 details[key] = fact[key].strip()
         if isinstance(fact.get("tag"), str) and re.fullmatch(r"_?[A-Z][A-Z0-9_]{1,30}", fact["tag"]):
             details["tag"] = fact["tag"]
+        if isinstance(fact.get("ref"), str) and re.fullmatch(r"[0-9a-f]{6,32}", fact["ref"]):
+            details["ref"] = fact["ref"]  # Where lines kept from another program's file belong.
         citations, people = clean_citations(fact.get("citations")), clean_role_people(fact.get("people"))
         if citations:
             details["citations"] = citations
@@ -1209,7 +1376,8 @@ def person_tasks(person):
 
 def person_story(person):
     story = person.extra.get("story")
-    return story.strip() if isinstance(story, str) else ""
+    # Blank lines around it go, but not the indent of its first paragraph.
+    return story.strip("\r\n").rstrip() if isinstance(story, str) and story.strip() else ""
 
 
 def face_links(tree):
@@ -1339,12 +1507,32 @@ def roles_of(tree, person_id):
     return list(tree.held("roles", everyone).get(person_id, []))
 
 
+_SOURCE_TOKEN = re.compile(r"@ft:s:([^@]+)@")
+
+
+def kept_line_lists(tree):
+    """Every list of lines kept from another program's file (see gedcom._leftovers)."""
+    found = [p.extra.get("gedcom") for p in tree.people.values()]
+    found += [f.extra.get("gedcom") for f in tree.families.values()]
+    sources = tree.extra.get("sources")
+    found += [s.get("gedcom") for s in (sources.values() if isinstance(sources, dict) else ()) if isinstance(s, dict)]
+    found += list(as_list(tree.extra.get("gedcom_records")))
+    repositories = tree.extra.get("gedcom_repositories")
+    found += list(repositories.values()) if isinstance(repositories, dict) else []
+    return [lines for lines in found if isinstance(lines, list)]
+
+
 def cited_sources(tree):
-    """{source id: number of citations}."""
+    """{source id: number of citations}. A citation kept as written from another
+    program's file (a person's own "1 SOUR @S3@") counts too."""
     counts = {}
     for _owner, _kind, fact in stored_facts(tree):
         for citation in clean_citations(fact.get("citations")):
             counts[citation["source"]] = counts.get(citation["source"], 0) + 1
+    for lines in kept_line_lists(tree):
+        for line in lines:
+            for source_id in _SOURCE_TOKEN.findall(line) if isinstance(line, str) else ():
+                counts[source_id] = counts.get(source_id, 0) + 1
     return counts
 
 

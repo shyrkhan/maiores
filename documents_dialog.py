@@ -234,19 +234,25 @@ class DocumentsDialog(QDialog):
 
     def add_files(self, paths=None):
         """Copies each file into the tree; returns the names that could not be added."""
-        refused = []
+        refused, failed = [], None
         for path in paths if paths is not None else self.ask_files():
             try:
                 stored = documents.store_document(path, self.folder, self.created)
-            except (documents.DocumentError, OSError):
+            except documents.DocumentError:
                 refused.append(Path(path).name)
+                continue
+            except OSError as error:  # Not the file's fault: the tree's folder could not take it.
+                refused.append(Path(path).name)
+                failed = failed or error
                 continue
             if all(item["file"] != stored for item in self.items):
                 kind = "photo" if documents.is_image(path) else "other"
                 self.items.append({"file": stored, "title": Path(path).stem, "kind": kind, "date": "",
                                    "private": False})
         self._fill(len(self.items) - 1)
-        if refused:
+        if failed is not None:
+            self.empty.setText(t("documents_not_copied", names=", ".join(refused), error=failed.strerror or failed))
+        elif refused:
             self.empty.setText(t("documents_refused", names=", ".join(refused)))
             self.empty.setVisible(True)
         return refused

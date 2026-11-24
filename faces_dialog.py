@@ -168,6 +168,8 @@ class FacesDialog(QDialog):
             widget.setEnabled(face is not None and (widget is not self.choose or self.context.find_person is not None))
         self.name.setText((face or {}).get("name", ""))
         self.portrait.setEnabled(bool(face and face.get("person")))
+        chosen = bool(face) and (face.get("person"), face.get("rect")) in self.portraits
+        self.portrait.setText(t("faces_portrait_chosen") if chosen else t("faces_portrait"))
 
     def add_face(self, rect):
         self.faces.append({"rect": rect})
@@ -183,6 +185,10 @@ class FacesDialog(QDialog):
             return
         chosen = self.context.find_person(t("faces_who"))
         if chosen:
+            if face.get("person") != chosen:
+                # A portrait picked for whoever the face was before is not theirs any more,
+                # nor the new person's until asked for.
+                self._drop_portrait(face)
             face["person"] = chosen
             self._fill(self.list.currentRow())
 
@@ -201,9 +207,16 @@ class FacesDialog(QDialog):
             self.portraits = [p for p in self.portraits if p[0] != face["person"]] + [(face["person"], face["rect"])]
             self.portrait.setText(t("faces_portrait_chosen"))
 
+    def _drop_portrait(self, face):
+        kept = [p for p in self.portraits if not (p[0] == face.get("person") and p[1] == face.get("rect"))]
+        if len(kept) != len(self.portraits):
+            self.portraits = kept
+            self.portrait.setText(t("faces_portrait"))
+
     def remove_face(self):
         row = self.list.currentRow()
         if 0 <= row < len(self.faces):
+            self._drop_portrait(self.faces[row])  # No face, no portrait cut from it.
             del self.faces[row]
             self._fill(max(0, row - 1))
 

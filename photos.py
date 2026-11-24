@@ -47,10 +47,21 @@ def _prepared(image, crop):
     return flat
 
 
+MAX_PIXELS = 40_000_000  # 160 MB as a picture in memory: well inside Qt's 256 MB limit.
+
+
 def read_image(source):
     """Load a picture the right way up, or raise PhotoError."""
     reader = QImageReader(str(source))
     reader.setAutoTransform(True)  # Phone photos are stored sideways with a rotation tag.
+    size = reader.size()
+    if size.isValid() and size.width() * size.height() > MAX_PIXELS:
+        # A 108-megapixel phone photo would not fit Qt's reading limit: read it smaller,
+        # which is still far more than a portrait or a face needs. Faces are kept as
+        # fractions of the picture, so they land in the same place either way.
+        scale = (MAX_PIXELS / (size.width() * size.height())) ** 0.5
+        size.scale(int(size.width() * scale), int(size.height() * scale), Qt.AspectRatioMode.KeepAspectRatio)
+        reader.setScaledSize(size)
     image = reader.read()
     if image.isNull():
         raise PhotoError(reader.errorString())
@@ -76,6 +87,8 @@ def store_photo(image, folder, crop=None):
         written = writer.write(_prepared(image, crop or default_crop(image)))
         problem = writer.errorString()
         output.close()
+        if output.error() != QFile.FileError.NoError:  # Disk full: the file says so, the writer says "Unknown error".
+            written, problem = False, output.errorString()
         if not written:
             raise PhotoError(problem)
         os.replace(temp, media / name)

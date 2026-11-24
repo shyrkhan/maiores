@@ -140,6 +140,7 @@ STRINGS = {
         "relation_pick": "Compare {name} with:",
         "relation_title": "Relationship",
         "relation_text": "{b} is {a}'s {words}.",
+        "relation_none": "{a} and {b} are not related through the recorded links.",
         "field_marriage": "Married",
         "field_marriage_date": "date",
         "field_marriage_place": "place",
@@ -274,6 +275,7 @@ STRINGS = {
         "documents_private_mark": "private",
         "documents_missing": "The file is missing from the tree's media folder.",
         "documents_refused": "Not added (a type that can't be attached, or the file is too big or missing): {names}",
+        "documents_not_copied": "Could not copy into the tree's folder: {names}. {error}",
         "status_documents_added": "Documents attached to {name}: {count}.",
         "doc_kind_certificate": "Certificate",
         "doc_kind_photo": "Photo",
@@ -325,6 +327,7 @@ STRINGS = {
         "citations_empty": "No sources yet. A source is where this was found: a parish book, a certificate, a census, or what a relative remembers.",
         "role_godfather": "Godfather",
         "role_godmother": "Godmother",
+        "role_godparent": "Godparent",
         "role_witness": "Witness",
         "role_priest": "Priest",
         "role_informant": "Informant",
@@ -368,6 +371,7 @@ STRINGS = {
         "duplicates_first": "First",
         "duplicates_second": "Second",
         "dup_same_name": "same name",
+        "dup_differs": "The two records say different things here.",
         "dup_same_birth": "same birth year",
         "dup_same_death": "same death year",
         "dup_same_parents": "same parents",
@@ -614,7 +618,7 @@ STRINGS = {
         "line_choose": "Whose line? Everyone born with this surname stays clear; the rest fades.",
         "line_option": "{surname} ({count})",
         "line_none": "Nobody in this tree has a surname yet.",
-        "line_bar": "The {surname} line: {count} people",
+        "line_bar": "The {surname} line (people: {count})",
         "line_fade": "Others",
         "line_fade_tip": "How much of everyone else still shows",
         "line_only": "Only this line",
@@ -716,6 +720,7 @@ STRINGS = {
         "menu_support": "Su&pport Maiores...",
         "about_support": "Maiores is free. If it is useful to you, you can support it with a thank-you: {link}",
         "shortcuts_text": "Arrow keys: move between people\nEnter or F2: edit the selected person\nDelete: delete the selected person\nCtrl+F: find someone\nCtrl+Z / Ctrl+Shift+Z: undo / redo\nAlt+Left: back   Alt+Home: home person\nHome: fit the tree to the window\nCtrl+1 to Ctrl+5: charts\nCtrl+L: descendant chart\nCtrl+Shift+1-4: card style\nCtrl+Up / Ctrl+Down: more or fewer generations\nCtrl+R: how are they related\nCtrl+M: map\nCtrl+E: export a picture or PDF\nCtrl+P: print   Ctrl+Shift+P: print preview\nCtrl+V: paste a photo for the selected person\nCtrl+,: preferences\nF1: user guide\nF11: full screen",
+        "shortcuts_folds": "Shift+Up / Shift+Down: fold or unfold the selected person's ancestors / descendants\nShift+Left or Right: fold or unfold their brothers and sisters",
         "style_portrait": "Portraits",
         "style_round": "Round photos",
         "style_compact": "Compact boxes",
@@ -809,6 +814,9 @@ STRINGS = {
         "warn_born_future": "{name}'s birth date {year} is after today.",
         "warn_died_future": "{name}'s death date {year} is after today.",
         "warn_born_after_partner_died": "{name} is born after their partner {partner} died.",
+        "warn_parent_too_old": "{parent} would have been over {age} when {child} was born.",
+        "warn_married_before_born": "{name} is married before being born.",
+        "warn_died_too_old": "{name} would have died at about {age}.",
         "panel_check_dates": "Check these dates",
         "menu_check_dates": "Check &dates...",
         "check_dates_title": "Dates to check",
@@ -877,20 +885,22 @@ STRINGS = {
         "export_gedcom_title": "Export GEDCOM",
         "export_picture_title": "Export picture or PDF",
         "export_picture_filter": "PDF for printing (*.pdf);;PNG picture (*.png)",
-        "gedcom_filter": "GEDCOM files (*.ged *.GED);;All files (*)",
+        "gedcom_filter": "GEDCOM files (*.ged *.GED *.gdz *.zip);;All files (*)",
         "privacy_title": "Who is this for?",
         "privacy_label": "Living people's details:",
         "privacy_all": "Include living people (private items are always left out)",
         "privacy_hide": "Hide living people (for sharing)",
         "export_done": "Saved {path}",
         "export_failed": "Could not save {path}.",
+        "write_incomplete": "The file could not be written completely. Is the disk full?",
         "export_too_big": "This view is too big to save as a picture. Try PDF, or hide some branches.",
         "export_photos_note": "Saved {path}. Photos copied to a folder beside it: {count}.",
         "import_title": "Import GEDCOM",
         "import_target_title": "Save the imported family tree as",
         "import_done_title": "Import finished",
-        "import_done": "Imported {people} people and {families} families.",
+        "import_done": "Imported. People: {people}, families: {families}.",
         "import_photos": "Photos copied in: {count}.",
+        "import_documents": "Documents copied in: {count}.",
         "import_photos_failed": "Photos that could not be used: {count}.",
         "import_issues": "Data problems that need a look: {count}. Open the file and check the status bar.",
         "import_warn.encoding_guess": "The file's text encoding had to be guessed, so check that names look right.",
@@ -914,17 +924,20 @@ STRINGS = {
         "status_ancestors": "Showing the ancestors of {name}. Alt+Left goes back.",
         "restore_title": "Restore from backup",
         "restore_label": "Go back to the family tree as it was at:",
-        "restore_option": "{when} ({people} people)",
+        "restore_option": "{when} (people: {people})",
         "restore_none": "There are no backups to restore yet.",
         "restore_confirm": "Replace the current tree with the backup from {when}? The current version is backed up first, and you can undo this.",
         "restore_done": "Restored the backup from {when}.",
         "combine_incomplete": "Nothing was combined: the result would refer to records or files it doesn't have ({what}). Your tree is unchanged.",
+        "combine_left_out": "Not brought across, because the file is missing in their tree: {names}.",
+        "combine_left_out_photo": "the portrait of {name}",
         "restore_not_saved": "The backup could not be saved, so it was not restored: {error}",
-        "recover_offer": "This tree can't be opened: {error}\n\nIts newest readable backup is from {when} ({people} people). Use it? The damaged file is kept beside it, and photos and documents stay as they are.",
+        "recover_offer": "This tree can't be opened: {error}\n\nIts newest readable backup is from {when} (people: {people}). Use it? The damaged file is kept beside it, and photos and documents stay as they are.",
         "import_documents_failed": "Documents that could not be copied in: {count}.",
         "export_media_not_ours": "{path} already exists and holds other things, so the photos can't be put there. Save the file under another name or in another folder.",
         "dna_compare_builds": "These raw files can't be compared: they use different reference builds ({mine} and {theirs}), and only build 37 positions can be measured in cM.",
         "error_not_writable": "{path} cannot be written to, so it cannot be opened for editing.",
+        "open_disk_full": "The disk holding {path} is full. The tree is open, but changes can't be saved until there is free space again.",
         "error_unexpected": "Something went wrong: {error}\n\nYour last saved changes are safe.",
         "error_create_failed": "Could not create the family tree: {error}",
         "error_tree_exists": "A family tree already exists at {path}.",
@@ -990,13 +1003,74 @@ def set_language(code, ui_languages=()):
     """Choose the interface language; "system" follows `ui_languages`. Takes effect for
     everything made afterwards."""
     global LANGUAGE
-    LANGUAGE = pick_language(ui_languages) if code == SYSTEM else canonical(code) or "en"
+    # A code this version doesn't know counts as "system", as Preferences shows it.
+    LANGUAGE = pick_language(ui_languages) if code == SYSTEM else canonical(code) or pick_language(ui_languages)
 
 
 def right_to_left():
     return LANGUAGE in RIGHT_TO_LEFT
 
 
+# Turkish adds its endings to the number by how the number is said: 1950'den but
+# 1960'tan, 1950'ye but 1960'a. (Last word said, its last vowel, and whether it ends in a
+# vowel or in a voiceless consonant.)
+_TR_UNITS = {1: "bir", 2: "iki", 3: "üç", 4: "dört", 5: "beş", 6: "altı", 7: "yedi", 8: "sekiz", 9: "dokuz"}
+_TR_TENS = {1: "on", 2: "yirmi", 3: "otuz", 4: "kırk", 5: "elli", 6: "altmış", 7: "yetmiş", 8: "seksen", 9: "doksan"}
+
+
+def _tr_last_word(number):
+    if number == 0:
+        return "sıfır"
+    if number % 10:
+        return _TR_UNITS[number % 10]
+    if number % 100:
+        return _TR_TENS[number // 10 % 10]
+    if number % 1000:
+        return "yüz"
+    return "bin"
+
+
+def _tr_ending(number, ablative):
+    word = _tr_last_word(number)
+    vowel = next((c for c in reversed(word) if c in "aeıioöuü"), "e")
+    front = vowel in "eiöü"
+    if ablative:
+        return ("t" if word[-1] in "çfhkpsşt" else "d") + ("e" if front else "a") + "n"
+    return ("y" if word[-1] in "aeıioöuü" else "") + ("e" if front else "a")
+
+
+def turkish_endings(text):
+    """1950'den / 1960'e written by a fixed template, made right for each number."""
+    import re
+    return re.sub(r"(\d+)'(den|e)\b",
+                  lambda m: f"{m[1]}'{_tr_ending(int(m[1]), m[2] == 'den')}", text)
+
+
 def t(key, **values):
     text = STRINGS[LANGUAGE].get(key) or STRINGS["en"][key]
-    return text.format(**values) if values else text
+    text = text.format(**values) if values else text
+    if LANGUAGE == "tr" and key.startswith(("date_word_", "event_date_hint", "date_hint")):
+        text = turkish_endings(text)
+    return text
+
+
+_collators = {}
+
+
+def collation_key(text):
+    """For sorting names and places in the order the chosen language's alphabet has them:
+    Croatian Č after C, Ć after Č, Š after S; Turkish Ç after C; Czech Ch after H. Accents
+    are still ignored for searching (fold_text); this is only for the order of lists."""
+    try:
+        from PySide6.QtCore import QCollator, QLocale, Qt
+    except ImportError:  # No Qt (a script): plain order without accents.
+        from model import fold_text
+        return fold_text(text)
+    collator = _collators.get(LANGUAGE)
+    if collator is None:
+        collator = QCollator(QLocale(LANGUAGE))
+        collator.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        collator.setNumericMode(True)
+        _collators[LANGUAGE] = collator
+    return collator.sortKey(text or "")
+

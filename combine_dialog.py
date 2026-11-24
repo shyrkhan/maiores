@@ -8,9 +8,8 @@ from PySide6.QtWidgets import (
 
 import combine
 from canvas import clear_layout
-from model import fold_text
 from screen import fit_to_screen
-from strings import t
+from strings import collation_key, t
 
 NEW = ""  # The combo box value for "add as a new person".
 
@@ -43,7 +42,7 @@ class CombineDialog(QDialog):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        everyone = sorted(mine.people, key=lambda pid: fold_text(mine.people[pid].display_name))
+        everyone = sorted(mine.people, key=lambda pid: collation_key(mine.people[pid].display_name))
         self.boxes = {}
         start = initial.get("matches")
         for row, their_id in enumerate(self.order):

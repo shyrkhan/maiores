@@ -202,7 +202,7 @@ def check(tree, tester, match):
     other = match.get("person")
     if not other or other not in tree.people or match.get("cm") is None:
         return "unknown", None, None
-    relation = kinship.blood_relation(tree, tester, other)
+    relation = kinship.blood_relation(tree, tester, other, biological=True)  # Adoption shares no DNA.
     if relation is None or relation.kind != "blood":
         return "unrelated", relation, None
     figures = expected(relation.up, relation.down, relation.half)
@@ -216,7 +216,8 @@ def check(tree, tester, match):
 # Reading match lists and segment files (CSV from MyHeritage, FamilyTreeDNA, GEDmatch,
 # 23andMe...). Their column names differ and change, so columns are found by meaning.
 def _key(header):
-    return re.sub(r"[^a-z0-9#%]", "", header.lower())
+    from model import fold_text  # "Größtes Segment" -> "grosstessegment": letters kept, not dropped.
+    return re.sub(r"[^a-z0-9#%]", "", fold_text(header))
 
 
 def _find(headers, *wanted, avoid=()):
@@ -228,8 +229,9 @@ def _find(headers, *wanted, avoid=()):
     return None
 
 
-def _cm_value(text):
-    """'250', '250 cM', '3.5% (250 cM)', '1,234.5' -> cM; None if no number."""
+def _cm_value(text, comma_decimal=False):
+    """'250', '250 cM', '3.5% (250 cM)', '1,234.5' -> cM; None if no number. With
+    `comma_decimal` (the file writes 48,5), a lone dot is a thousands mark: 2.612 is 2612."""
     text = (text or "").strip()
     found = re.search(r"([\d.,]+)\s*cm", text, re.IGNORECASE)
     number = found[1] if found else (re.search(r"[\d.,]+", text) or [None])[0]
@@ -244,11 +246,13 @@ def _cm_value(text):
     elif "," in number:
         thousands = re.fullmatch(r"\d{1,3}(,\d{3})+", number)
         number = number.replace(",", "") if thousands else number.replace(",", ".")
+    elif comma_decimal and re.fullmatch(r"\d{1,3}(\.\d{3})+", number):
+        number = number.replace(".", "")
     return _number(number)
 
 
 KIT_COLUMNS = ("kit", "kitnumber", "kitid", "matchkit", "matchkitid", "matchid", "matchguid", "testid",
-               "matchtestid", "profileid", "kit2")
+               "matchtestid", "profileid", "kit2", "kit2number", "matchedkit", "matchedkitnumber", "kitnumber2")
 
 
 def read_table(data):
@@ -275,17 +279,32 @@ def read_table(data):
     return [h.strip() for h in rows[0]], [r for r in rows[1:] if any(c.strip() for c in r)]
 
 
+def _comma_decimal(rows, column):
+    """True when the file writes decimals with a comma (48,5): then 2.612 means 2612."""
+    if column is None:
+        return False
+    return any(re.search(r"\d,\d{1,2}(?!\d)", row[column]) for row in rows if column < len(row))
+
+
 def read_match_file(data, source=""):
     """("matches", [match]) or ("segments", [(match name, segment)]), or ("unknown", [])."""
     headers, rows = read_table(data)
     if not headers:
         return "unknown", []
-    chromosome = _find(headers, lambda k: k in ("chromosome", "chr", "chrom"))
-    start = _find(headers, lambda k: "start" in k and ("loc" in k or "pos" in k or k in ("start", "b37start", "b36start")))
-    end = _find(headers, lambda k: ("end" in k or "stop" in k) and ("loc" in k or "pos" in k or k in ("end", "b37end", "b36end", "stop")))
+    # Column names in the companies' own words, English or not: "Chromosome Number",
+    # "Chromosom", "Chromosome Start Point", "Startposition".
+    chromosome = _find(headers, lambda k: k in ("chromosome", "chr", "chrom", "chromosom", "chromosomenumber",
+                                                "chromosomenr", "kromosom", "chromosome#"))
+    start = _find(headers, lambda k: "start" in k and ("loc" in k or "pos" in k or "point" in k
+                                                       or k in ("start", "b37start", "b36start")))
+    end = _find(headers, lambda k: ("end" in k or "stop" in k) and ("loc" in k or "pos" in k or "point" in k
+                                                                     or k in ("end", "b37end", "b36end", "stop")))
     if chromosome is not None and start is not None and end is not None:
-        name = _find(headers, lambda k: k == "matchname", lambda k: k in ("name", "kit2name", "matchingkitname"),
-                     lambda k: "name" in k)
+        # The match's name, never the tester's own ("Name" beside "Name der Übereinstimmung").
+        name = _find(headers, lambda k: k == "matchname", lambda k: k in ("kit2name", "matchingkitname", "displayname"),
+                     lambda k: "name" in k and ("match" in k or "ubereinstimmung" in k or "kit2" in k),
+                     lambda k: k == "name", lambda k: "name" in k and "kit1" not in k)
+        last = _find(headers, lambda k: k in ("lastname", "surname"))
         cm = _find(headers, lambda k: "centimorgan" in k or k in ("cm", "segmentcm", "lengthcm"))
         snps = _find(headers, lambda k: "snp" in k)
         kit = _find(headers, lambda k: k in KIT_COLUMNS)
@@ -295,36 +314,44 @@ def read_match_file(data, source=""):
             segment = clean_segment({"match": "x", "chr": cell(chromosome), "start": cell(start).replace(",", ""),
                                      "end": cell(end).replace(",", ""), "cm": _cm_value(cell(cm)),
                                      "snps": cell(snps).replace(",", "")})
-            if segment and cell(name):
-                found.append((cell(name), segment, cell(kit)))
+            who = cell(name)
+            if who and last is not None and cell(last) and cell(last).casefold() not in who.casefold():
+                who = f"{who} {cell(last)}"  # 23andMe: "Display Name" and "Surname" apart.
+            if segment and who:
+                found.append((who, segment, cell(kit)))
         return "segments", found
-    name = _find(headers, lambda k: k in ("fullname", "matchname", "displayname", "name"),
+    name = _find(headers, lambda k: k in ("fullname", "matchname", "displayname", "name", "nom", "ime", "naam",
+                                          "nombre", "nome"),
                  lambda k: k.endswith("name") and "first" not in k and "last" not in k and "middle" not in k
                  and "manager" not in k and "kit" not in k)
     first = _find(headers, lambda k: k == "firstname")
     last = _find(headers, lambda k: k in ("lastname", "surname"))
-    longest = _find(headers, lambda k: "largest" in k or "longest" in k)
+    longest = _find(headers, lambda k: "largest" in k or "longest" in k or "grosstes" in k or "langstes" in k
+                    or "najduz" in k or "plusgrand" in k or "pluslong" in k)
     cm = _find(headers, lambda k: ("cm" in k or "centimorgan" in k or (("shared" in k or "total" in k) and "dna" in k))
-               and "%" not in k and "percent" not in k, avoid=("largest", "longest", "segments"))
+               and "%" not in k and "percent" not in k,
+               avoid=("largest", "longest", "segments", "grosstes", "langstes", "najduz", "plusgrand", "pluslong"))
     percent = _find(headers, lambda k: ("percent" in k or "%" in k) and ("dna" in k or "shared" in k))
     segments = _find(headers, lambda k: "segment" in k and "largest" not in k and "longest" not in k)
     kit = _find(headers, lambda k: k in KIT_COLUMNS)
     guess = _find(headers, lambda k: "estimatedrelationship" in k or "relationshiprange" in k or
-                  "suggestedrelationship" in k or "predictedrelationship" in k or k == "relationship")
+                  "suggestedrelationship" in k or "predictedrelationship" in k or k == "relationship"
+                  or "verwandtschaft" in k or "parente" in k or "srodstvo" in k or "verwantschap" in k)
     if (name is None and first is None) or (cm is None and percent is None):
         return "unknown", []
+    comma = _comma_decimal(rows, cm)
     matches = []
     for row in rows:
         cell = lambda i: row[i].strip() if i is not None and i < len(row) else ""
         who = cell(name) or " ".join(x for x in (cell(first), cell(last)) if x)
         if cell(name) and cell(last) and cell(last).casefold() not in who.casefold():
             who = f"{who} {cell(last)}"  # 23andMe: "Display Name" and "Surname" apart.
-        amount = _cm_value(cell(cm)) if cm is not None else None
+        amount = _cm_value(cell(cm), comma) if cm is not None else None
         if amount is None and percent is not None:  # 23andMe: share of the whole genome.
             share = _cm_value(cell(percent).replace("%", ""))
             amount = round(share * GENOME_CM / 100, 1) if share is not None else None
         match = clean_match({"name": who, "kit": cell(kit), "cm": amount, "segments": _cm_value(cell(segments)),
-                             "longest": _cm_value(cell(longest)), "guess": cell(guess), "source": source})
+                             "longest": _cm_value(cell(longest), comma), "guess": cell(guess), "source": source})
         if match:
             matches.append(match)
     return "matches", matches
@@ -399,6 +426,11 @@ def add_segments(test, found, source=""):
             by_name.setdefault(name.casefold(), []).append(match)
             if kit:
                 by_kit[kit] = match
+        elif kit and not match.get("kit"):
+            # A match known only by name takes the first kit id that names it: another Ana
+            # with another kit id then becomes a match of her own, not this one.
+            match["kit"] = kit
+            by_kit[kit] = match
         segment = {**segment, "match": match["id"]}
         if segment["cm"] is None:
             segment["cm"] = round(segment_cm(segment["chr"], segment["start"], segment["end"]), 2)

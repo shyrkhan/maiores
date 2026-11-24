@@ -14,12 +14,12 @@ from PySide6.QtWidgets import (
 )
 
 from model import (
-    CITATION_QUALITIES, NAME_TYPES, ROLES, SOURCE_FIELDS, cited_sources, clean_citations, clean_role_people,
-    date_input_text, fold_text, new_id, normalize_date_input, person_events, person_names, stored_facts,
+    CITATION_QUALITIES, FACT_EXTRAS, NAME_TYPES, ROLES, SOURCE_FIELDS, cited_sources, clean_citations, clean_role_people,
+    date_input_text, new_id, normalize_date_input, person_events, person_names, stored_facts,
     tree_sources,
 )
 from screen import fit_hint, fit_to_screen
-from strings import t
+from strings import collation_key, t
 
 
 class FactContext:
@@ -83,7 +83,7 @@ class _ListDialog(QDialog):
         self.setMinimumWidth(480)
         self.items = [copy.deepcopy(item) for item in items]
         self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(lambda _item: self.edit())
+        self.list.itemActivated.connect(lambda _item: self.edit())
         self.empty = QLabel(t(empty_key))
         self.empty.setWordWrap(True)
         row = QHBoxLayout()
@@ -145,6 +145,7 @@ class SourceDialog(QDialog):
         self.fields["title"].setPlaceholderText(t("source_title_hint"))
         self.fields["repository"].setPlaceholderText(t("source_repository_hint"))
         self.note = QPlainTextEdit(source.get("note", ""))
+        self.note.setTabChangesFocus(True)  # Tab moves on, for those using the keyboard.
         self.note.setFixedHeight(70)
         form = QFormLayout()
         for key in ("title", "author", "repository"):
@@ -210,7 +211,7 @@ class CitationDialog(QDialog):
     def _fill_sources(self, selected=None):
         self.source.blockSignals(True)
         self.source.clear()
-        for source_id in sorted(self.context.sources, key=lambda s: fold_text(self.context.source_title(s))):
+        for source_id in sorted(self.context.sources, key=lambda s: collation_key(self.context.source_title(s))):
             self.source.addItem(self.context.source_title(source_id), source_id)
         self.source.setCurrentIndex(max(0, self.source.findData(selected)) if self.source.count() else -1)
         self.source.blockSignals(False)
@@ -471,7 +472,7 @@ class SourcesDialog(QDialog):
         self.uses = cited_sources(tree)
         self.merged, self.removed = {}, set()
         self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(lambda _item: self.edit())
+        self.list.itemActivated.connect(lambda _item: self.edit())
         self.empty = QLabel(t("sources_empty"))
         self.empty.setWordWrap(True)
         row = QHBoxLayout()
@@ -492,7 +493,7 @@ class SourcesDialog(QDialog):
         self._fill()
 
     def order(self):
-        return sorted(self.sources, key=lambda s: fold_text(self.sources[s]["title"]))
+        return sorted(self.sources, key=lambda s: collation_key(self.sources[s]["title"]))
 
     def _fill(self, select=None):
         self.list.clear()
@@ -585,7 +586,7 @@ class UnsourcedDialog(QDialog):
         self.list = QListWidget()
         for person_id, label in self.rows:
             self.list.addItem(label)
-        self.list.itemDoubleClicked.connect(self._chosen)
+        self.list.itemActivated.connect(self._chosen)
         layout = QVBoxLayout(self)
         layout.addWidget(intro)
         layout.addWidget(self.list)
@@ -598,17 +599,23 @@ class UnsourcedDialog(QDialog):
         self.accept()
 
 
+def _recorded(fact):
+    """Something is written down: a date, place or text, or a detail such as an address,
+    a cause of death or an age."""
+    return isinstance(fact, dict) and any(
+        isinstance(fact.get(key), str) and fact[key].strip() for key in ("date", "place", "text", *FACT_EXTRAS))
+
+
 def unsourced_facts(tree):
     """[(person id, 'Born: Ivan Radić, 1921')] for recorded facts without any citation."""
     found = []
-    for person in sorted(tree.people.values(), key=lambda p: (fold_text(p.surname), fold_text(p.given), p.id)):
+    for person in sorted(tree.people.values(), key=lambda p: (collation_key(p.surname), collation_key(p.given), p.id)):
         if person.extra.get("hidden"):
             continue
         facts = [("fact_birth", person.birth), ("fact_death", person.death)]
         facts += [(f"event_{e['type']}", e) for e in person_events(person)]
         for label, fact in facts:
-            if fact and (fact.get("date") or fact.get("place") or fact.get("text")) \
-                    and not clean_citations(fact.get("citations")):
+            if _recorded(fact) and not clean_citations(fact.get("citations")):
                 when = date_input_text(fact.get("date", ""))
                 found.append((person.id, f"{t(label)}: {person.display_name}{', ' + when if when else ''}"))
         for item in person_names(person):
@@ -616,7 +623,7 @@ def unsourced_facts(tree):
                 found.append((person.id, f"{t('other_name_title')}: {person.display_name} - {name_text(item)}"))
     seen = set()
     for owner, kind, fact in stored_facts(tree):
-        if kind == "marriage" and owner not in seen and (fact.get("date") or fact.get("place")) \
+        if kind == "marriage" and owner not in seen and _recorded(fact) \
                 and not clean_citations(fact.get("citations")):
             seen.add(owner)
             family = tree.families[owner]

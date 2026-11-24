@@ -1,5 +1,6 @@
 """The side panel: everything about the selected person, and what you can do to them."""
 import html
+import re
 
 from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QPainter, QPixmap
@@ -42,6 +43,15 @@ def _place_text(date, place):
     return ", ".join(part for part in (shown, place) if part)
 
 
+
+_LONG_RUN = re.compile(r"[^\s<>&;\"'=]{40,}")
+
+
+def _breakable(text):
+    """A long unbroken run (a web address in the notes, say) may break anywhere: the
+    panel wraps at spaces only, and such a line would push its buttons out of sight."""
+    return _LONG_RUN.sub(lambda m: "\u200b".join(m[0][i:i + 20] for i in range(0, len(m[0]), 20)), text)
+
 class PersonPanel(QFrame):
     def __init__(self, on_person_link, on_action):
         super().__init__()
@@ -56,6 +66,7 @@ class PersonPanel(QFrame):
         self.setFrameShape(QFrame.Shape.NoFrame)
 
         self.portrait = QLabel()
+        self.portrait.setAccessibleName(t("field_photo"))
         self.portrait.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.name = QLabel()
         self.name.setWordWrap(True)
@@ -69,7 +80,15 @@ class PersonPanel(QFrame):
         self.details.setWordWrap(True)
         self.details.setTextFormat(Qt.TextFormat.RichText)
         self.details.linkActivated.connect(self._link_clicked)
+        # Tab reaches each link (a parent, a document, "Photos with"), Enter follows it, and
+        # a screen reader reads the text, not only a picture of it.
+        self.details.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse
+                                             | Qt.TextInteractionFlag.LinksAccessibleByKeyboard
+                                             | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.details.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.details.setAccessibleName(t("menu_person").replace("&", ""))
         self.add_heading = QLabel(t("panel_add_heading"))
+        self.add_heading.setWordWrap(True)  # Russian at large text is wider than the panel.
         heading_font = self.add_heading.font()
         heading_font.setBold(True)
         self.add_heading.setFont(heading_font)
@@ -323,11 +342,13 @@ class PersonPanel(QFrame):
             notes = html.escape(person.notes).replace("\n", "<br>")
             heading = t("panel_notes_private") if person.extra.get("notes_private") else t("panel_notes")
             parts.append(f"<p><b>{html.escape(heading)}</b><br>{notes}</p>")
-        self.details.setText("".join(parts))
+        self.details.setText(_breakable("".join(parts)))
 
         for grid in (self.add_buttons, self.buttons, self.risky_buttons):
             clear_layout(grid, keep_widgets=True)  # The buttons are reused for the next person.
         counts = {}
+        places = {}  # Grid -> (row, column) of the next free cell.
+        full = self.width() - 24 if self.width() > 100 else PANEL_WIDTH - 24
         for key, label, enabled in actions:
             if key in ADD_KEYS:
                 grid = self.add_buttons
@@ -349,11 +370,33 @@ class PersonPanel(QFrame):
                 button.setProperty("action_key", key)
                 button.clicked.connect(self._button_clicked)
                 self.button_pool[key] = button
-            button.setText(label)
             button.setToolTip(label)
             button.setEnabled(enabled)
-            grid.addWidget(button, index // 2, index % 2)
+            # A label too long for half the panel (German, large text) gets a whole row; one
+            # too long even for that is shortened with "…", whole in its tooltip.
+            metrics = button.fontMetrics()
+            needed = metrics.horizontalAdvance(label.replace("&", "")) + 24
+            row, column = places.get(id(grid), (0, 0))
+            if needed > full / 2 - 4:
+                if column:
+                    row, column = row + 1, 0
+                button.setText(label if needed <= full else metrics.elidedText(label, Qt.TextElideMode.ElideRight, full - 24))
+                grid.addWidget(button, row, 0, 1, 2)
+                places[id(grid)] = (row + 1, 0)
+            else:
+                button.setText(label)
+                grid.addWidget(button, row, column)
+                places[id(grid)] = (row + 1, 0) if column else (row, 1)
             button.show()
+        # Tab in the order they are seen: the add buttons at the top first, the risky last.
+        shown = sorted((b for b in self.button_pool.values() if b.isVisibleTo(self) and self.isAncestorOf(b)),
+                       key=lambda b: (0 if b.property("action_key") in ADD_KEYS else
+                                      2 if b.property("action_key") in RISKY_KEYS else 1,
+                                      [k for k, _l, _e in actions].index(b.property("action_key"))
+                                      if b.property("action_key") in [k for k, _l, _e in actions] else 0))
+        for first, second in zip(shown, shown[1:]):
+            if first.window() is second.window():
+                QWidget.setTabOrder(first, second)
         has_add = any(key in ADD_KEYS for key, _label, _enabled in actions)
         has_risky = any(key in RISKY_KEYS for key, _label, _enabled in actions)
         self.add_heading.setVisible(has_add)

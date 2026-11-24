@@ -1,7 +1,7 @@
 """Windows that fit the screen they open on, down to a 1366 x 768 laptop."""
 import re
 
-from PySide6.QtCore import QEvent, QObject
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QGuiApplication
 
 # The window frame and title bar, and a little air, around a window's own size.
@@ -60,3 +60,18 @@ def fit_hint(edit, text):
     the field has room for; all of them are in the tooltip."""
     edit.setToolTip(text)
     _HintFitter(edit, text)
+
+
+def scrolling(layout):
+    """A window's contents in a scroll area: with large text on a small screen, what
+    doesn't fit scrolls, and the OK and Cancel buttons below stay in sight."""
+    from PySide6.QtWidgets import QFrame, QScrollArea, QWidget
+    inner = QWidget()
+    inner.setLayout(layout)
+    area = QScrollArea()
+    area.setWidget(inner)
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # Tab goes to the fields, not to the frame round them.
+    return area
+

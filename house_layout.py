@@ -5,6 +5,7 @@ lines arrive at the blood relative's portrait. A partner's own parents belong to
 that partner's family line, so one view never has to show both sides of every
 marriage. No interface code here.
 """
+import itertools
 import math
 from dataclasses import dataclass, field
 
@@ -199,6 +200,7 @@ class _Builder:
             slots = []
 
         kids_left_limit = None
+        bars = []  # (left, right, level) of the bars already drawn under this person.
         for drop_x, drop_y, family in slots:
             if family.id in self.expanded_families:
                 continue
@@ -221,8 +223,18 @@ class _Builder:
                 shift = max(shift, kids_left_limit - placed[0].left)
             placed = [kid.moved(shift) for kid in placed]
 
-            bus_y = y + m.bus_offset
             anchors = [kid.anchor for kid in placed]
+            # Each partner's children hang from a bar of their own: a bar that would run
+            # along another family's bar goes a step lower, so the drops of the second and
+            # third partner do not land on the first one's bar.
+            span = (min(anchors + [drop_x]), max(anchors + [drop_x]))
+            levels = max(1, int((m.row_h - m.bus_offset) // m.rail_step))
+            level = 0
+            while level < levels - 1 and any(lv == level and a <= span[1] + m.rail_step and span[0] <= b + m.rail_step
+                                             for a, b, lv in bars):
+                level += 1
+            bars.append((span[0], span[1], level))
+            bus_y = y + m.bus_offset + level * m.rail_step
             lines.append((drop_x, drop_y, drop_x, bus_y))
             if not any(f.person_id == person_id for f in folds):
                 folds.append(Fold(person_id, "down", drop_x, (drop_y + bus_y) / 2))
@@ -409,7 +421,17 @@ def _beside(fixed_cards, fixed_lines, block, side, m):
 
 def _drop_from(cards, parents, parent_y, m):
     """Where the line down to a couple's children starts."""
-    xs = sorted(c.x + m.card_w / 2 for c in cards if c.person_id in parents and c.y == parent_y)
+    by_person = {}
+    for c in cards:
+        if c.person_id in parents and c.y == parent_y:
+            by_person.setdefault(c.person_id, []).append(c.x + m.card_w / 2)
+    # Someone drawn twice in the row (cousins who married: the shared grandparents' child
+    # appears on both sides) must not stretch the drop to their far copy: use the copies
+    # that stand closest together, the couple as drawn side by side.
+    xs = []
+    for options in itertools.product(*by_person.values()):
+        if not xs or max(options) - min(options) < xs[-1] - xs[0]:
+            xs = sorted(options)
     if len(xs) >= 2:
         return (xs[0] + xs[-1]) / 2, parent_y + m.card_h / 2
     if xs:

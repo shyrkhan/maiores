@@ -23,6 +23,18 @@ segno (QR codes for sharing on the network)
   Copyright Lars Heuer. Licensed under the BSD 3-Clause License.
   https://github.com/heuer/segno
 
+Libraries bundled with Qt and cryptography (which of them depends on the system the
+program was built for):
+  OpenSSL — Apache License 2.0. https://www.openssl.org/
+  FreeType — FreeType License (BSD-style). https://freetype.org/
+  HarfBuzz — MIT licence. https://harfbuzz.github.io/
+  ICU — Unicode License v3. https://icu.unicode.org/
+  libxml2 — MIT licence. https://gitlab.gnome.org/GNOME/libxml2
+  On Linux: GTK 3, GLib, Cairo, Pango and GnuTLS — GNU Lesser General Public
+  License (LGPL-2.1 or later). Source code: https://gitlab.gnome.org/ and
+  https://gnutls.org/. Like Qt, these are separate files in the program's folder
+  and can be replaced with other compatible versions.
+
 Shared cM Project, version 4 (March 2020) — relationship ranges for shared DNA
   Blaine T. Bettinger, thegeneticgenealogist.com. Licensed under the Creative
   Commons Attribution 4.0 licence (CC BY 4.0). The figures in dna.py are taken

@@ -10,6 +10,7 @@ from PySide6.QtGui import QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QPushButton, QWidget
 
 import theme
+import strings
 from strings import t
 
 CARD_W, CARD_H, PORTRAIT = 340, 104, 64
@@ -29,7 +30,7 @@ def summarise(path, tree_file):
     """What a card shows about a tree. A tree that cannot be read still gets a card (with
     just its name): opening it gives the real reason."""
     from model import TreeFormatError
-    from photos import read_image, resolve_photo
+    from photos import PhotoError, read_image, resolve_photo
     from storage import TreeLoadError, read_tree
     summary = TreeSummary(Path(path))
     try:
@@ -43,9 +44,12 @@ def summarise(path, tree_file):
         summary.first_name = first.display_name
         summary.initials = "".join(part[:1] for part in (first.given, first.surname) if part).upper()
         source = resolve_photo(path, first.photo) if first.photo else None
-        if source is not None:
-            image = read_image(source)
-            if image is not None and not image.isNull():
+        try:
+            image = read_image(source) if source is not None else None
+        except (PhotoError, OSError):
+            image = None  # A damaged portrait: the card shows the initials instead.
+        if image is not None:
+            if not image.isNull():
                 summary.portrait = image.scaled(PORTRAIT * 2, PORTRAIT * 2, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                                 Qt.TransformationMode.SmoothTransformation)
     return summary
@@ -85,7 +89,7 @@ class TreeCard(QPushButton):
     def details(self):
         lines = [t("start_card_people", count=self.summary.people)]
         if self.summary.changed is not None:
-            when = QLocale().toString(self.summary.changed, QLocale.FormatType.ShortFormat)
+            when = QLocale(strings.LANGUAGE).toString(self.summary.changed, QLocale.FormatType.ShortFormat)
             lines.append(t("start_card_changed", date=when))
         return "  ·  ".join(lines)
 

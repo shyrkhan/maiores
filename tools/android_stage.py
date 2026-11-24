@@ -15,7 +15,7 @@ MODULES = ["app", "canvas", "dialogs", "edits", "exports", "gedcom", "house_layo
            "documents", "documents_dialog", "privacy", "facts_dialogs",
            "duplicates", "duplicates_dialog", "reports", "reports_dialog", "poster",
            "faces_dialog", "places_dialog", "research_dialogs", "webshare", "webshare_dialog", "theme", "views_dialogs", "icons", "start_cards", "dna", "dna_dialog", "branding",
-           "map_view", "map_dialog", "screen"]
+           "map_view", "map_dialog", "screen", "a11y"]
 FOLDERS = ["fonts", "assets", "translations"]
 
 MAIN = '''"""Entry point for the Android build. The phone version is the same program."""

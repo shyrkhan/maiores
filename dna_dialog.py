@@ -23,7 +23,7 @@ import dna
 import kinship
 import strings
 import theme
-from screen import fit_to_screen
+from screen import fit_to_screen, scrolling
 from strings import t
 
 RAW_DIR = dna.RAW_DIR
@@ -53,10 +53,15 @@ def shorthand(up, down, half=False):
     prefix = "Half " if half else ""
     if min(up, down) <= 1:
         far = max(up, down)
-        names = {(1, 0): "Parent/Child", (1, 1): "Sibling", (2, 0): "Grandparent", (2, 1): "Aunt/Niece"}
+        # Which way round: a grandchild is no grandparent ("down" is the match's side).
+        older = up > down
+        names = {(1, 0): "Parent" if older else "Child", (1, 1): "Sibling",
+                 (2, 0): "Grandparent" if older else "Grandchild", (2, 1): "Aunt/Uncle" if older else "Niece/Nephew"}
         if (far, min(up, down)) in names:
             return prefix + names[(far, min(up, down))]
-        return prefix + ("G" * (far - 2) + "-Grandparent" if min(up, down) == 0 else "G" * (far - 2) + "-Aunt/Niece")
+        if min(up, down) == 0:
+            return prefix + "G" * (far - 2) + ("-Grandparent" if older else "-Grandchild")
+        return prefix + "G" * (far - 2) + ("-Aunt/Uncle" if older else "-Niece/Nephew")
     degree, removed = min(up, down) - 1, abs(up - down)
     return f"{prefix}{degree}C" + (f"{removed}R" if removed else "")
 
@@ -152,6 +157,7 @@ class TestDialog(QDialog):
         self.kit = QLineEdit(test.get("kit", ""))
         self.haplogroup = QLineEdit(test.get("haplogroup", ""))
         self.notes = QTextEdit(test.get("notes", ""))
+        self.notes.setTabChangesFocus(True)  # Tab moves on, for those using the keyboard.
         self.notes.setMaximumHeight(80)
         form = QFormLayout()
         form.addRow(t("dna_company"), self.company)
@@ -193,6 +199,7 @@ class MatchDialog(QDialog):
         self.longest.setValue(match.get("longest") or 0)
         self.guess = QLineEdit(match.get("guess", ""))
         self.notes = QTextEdit(match.get("notes", ""))
+        self.notes.setTabChangesFocus(True)  # Tab moves on, for those using the keyboard.
         self.notes.setMaximumHeight(80)
         self.linked = QLabel()
         choose = QPushButton(t("dna_link_person"))
@@ -301,7 +308,7 @@ class DnaDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSortingEnabled(True)
-        self.table.itemDoubleClicked.connect(lambda _item: self.edit_match())
+        self.table.itemActivated.connect(lambda _item: self.edit_match())
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.explain = QLabel()
         self.explain.setWordWrap(True)
@@ -348,11 +355,14 @@ class DnaDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        contents = QVBoxLayout()
+        contents.setContentsMargins(0, 0, 0, 0)
+        contents.addLayout(top)
+        contents.addWidget(self.test_info)
+        contents.addWidget(self.tabs, 1)
+        contents.addWidget(credit)
         layout = QVBoxLayout(self)
-        layout.addLayout(top)
-        layout.addWidget(self.test_info)
-        layout.addWidget(self.tabs, 1)
-        layout.addWidget(credit)
+        layout.addWidget(scrolling(contents), 1)  # OK and Cancel stay in sight with large text.
         layout.addWidget(buttons)
         self._fill_tests()
         self._fill_possible()
@@ -508,7 +518,13 @@ class DnaDialog(QDialog):
         match = chosen[0]
         dialog = MatchDialog(self, match, self.tree, self.find_person)
         if dialog.exec():
-            match.update({k: v for k, v in dialog.values().items()})
+            values = dialog.values()
+            typed = any(values.get(k) != match.get(k) for k in ("cm", "segments", "longest"))
+            match.update(values)
+            if typed:
+                # Figures typed in are the person's own: a segment file read later must not
+                # add them up again over what was typed.
+                match.pop("from_segments", None)
             self._fill_matches()
         dialog.deleteLater()
 

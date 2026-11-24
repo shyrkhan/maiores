@@ -4,7 +4,6 @@ Every rule here exists because a real bug broke it once. `run_checks` only
 looks: it never saves, changes the tree or processes events, so it is safe to
 call at any moment, from tests, the explorer and dev mode alike.
 """
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,7 +65,8 @@ def _disk_matches_memory(window):
     if window.save_error:
         return [Problem("save_failed", FAIL, window.save_error)]
     path = Path(window.folder) / TREE_FILE
-    on_disk = Tree.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    from storage import _read_json  # Read exactly as the program reads it.
+    on_disk = Tree.from_dict(_read_json(path))
     if on_disk != window.tree:
         return [Problem("disk_differs", FAIL, "tree.json does not match the tree in memory")]
     return []

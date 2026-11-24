@@ -25,8 +25,8 @@ PALETTES = {
     },
     "light": {
         "background": "#f6f6f4", "panel": "#ebedef", "control": "#dfe3e8", "text": "#1f2328", "line": "#7d838c",
-        "frame": "#6b717a", "highlight": "#2f6fd1", "path": "#c07f00", "portrait_light": "#d6dae0",
-        "portrait_dark": "#c3c9d1", "silhouette": "#9aa1ab", "soft": "#5b616b", "warn": "#9a6700",
+        "frame": "#6b717a", "highlight": "#2862bd", "path": "#c07f00", "portrait_light": "#d6dae0",
+        "portrait_dark": "#c3c9d1", "silhouette": "#9aa1ab", "soft": "#5b616b", "warn": "#865900",
         "error": "#c62828", "divider": "#c9ccd1", "selected_text": "#ffffff", "disabled": "#9aa0a6",
         "mark": "#e0a020", "tile": "#dde1e6", "tile_text": "#40464d", "fan_father": "#dbe4f3",
         "fan_mother": "#f3dde6", "card": "#ffffff", "father_side": "#3f6db3", "mother_side": "#b0507c",
@@ -35,7 +35,7 @@ PALETTES = {
     "paper": {
         "background": "#f3ead6", "panel": "#e9dec4", "control": "#e0d2b2", "text": "#3a2c1e", "line": "#8c6b4a",
         "frame": "#7b5a3a", "highlight": "#9b4a1c", "path": "#b07a10", "portrait_light": "#d9c7a3",
-        "portrait_dark": "#c4ae86", "silhouette": "#8f7652", "soft": "#6e5a44", "warn": "#8a5a00",
+        "portrait_dark": "#c4ae86", "silhouette": "#8f7652", "soft": "#6e5a44", "warn": "#7a4f00",
         "error": "#a3341d", "divider": "#c9b893", "selected_text": "#fff8ec", "disabled": "#a8977a",
         "mark": "#c0841a", "tile": "#e3d6b8", "tile_text": "#5a4630", "fan_father": "#e6d8b8",
         "fan_mother": "#ecd2c2", "card": "#faf4e6", "father_side": "#6f7d9a", "mother_side": "#a0646e",
@@ -104,3 +104,39 @@ def apply(name, app=None):
             palette.setColor(QPalette.ColorGroup.Disabled, role, colour("disabled"))
         app.setPalette(palette)
     return current
+
+
+def _outlined_style_class():
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QPen
+    from PySide6.QtWidgets import QProxyStyle, QStyle
+
+    class OutlinedStyle(QProxyStyle):
+        """Fusion draws a check box's edge from the window colour: on a dark or pale
+        window it all but disappears (1.1:1). An outline in the theme's line colour is
+        drawn on top, so every check box and option button can be seen (at least 3:1)."""
+
+        def drawPrimitive(self, element, option, painter, widget=None):
+            super().drawPrimitive(element, option, painter, widget)
+            if element not in (QStyle.PrimitiveElement.PE_IndicatorCheckBox,
+                               QStyle.PrimitiveElement.PE_IndicatorRadioButton):
+                return
+            painter.save()
+            painter.setRenderHint(painter.RenderHint.Antialiasing)
+            painter.setPen(QPen(colour("line"), 1.2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            box = QRectF(option.rect).adjusted(0.6, 0.6, -0.6, -0.6)
+            if element == QStyle.PrimitiveElement.PE_IndicatorRadioButton:
+                painter.drawEllipse(box)
+            else:
+                painter.drawRoundedRect(box, 2, 2)
+            painter.restore()
+
+    return OutlinedStyle
+
+
+def __getattr__(name):
+    if name == "OutlinedStyle":  # Made on first use: theme.py is imported before Qt is ready.
+        return _outlined_style_class()
+    raise AttributeError(name)
+

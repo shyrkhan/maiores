@@ -17,11 +17,14 @@ import html
 import json
 import os
 import secrets
+import socket
 import threading
+import unicodedata
 from pathlib import Path
 
 from model import (
-    date_input_text, fact_details, family_marriage, fold_text, person_events, person_names, person_story, tree_sources,
+    FOLD_LETTERS, date_input_text, fact_details, family_marriage, fold_text, person_events, person_names, person_story,
+    tree_sources,
 )
 from strings import t
 
@@ -71,7 +74,8 @@ def site_data(tree, home=None, photo_path=None, title=""):
 
 
 def _site_data(tree, home, photo_path, title):
-    sources = {k: v["title"] for k, v in tree_sources(tree).items()}
+    sources = {k: ", ".join(v[key] for key in ("title", "author", "repository") if v[key]) or t("source_untitled")
+               for k, v in tree_sources(tree).items()}
     people = {}
     for person in tree.people.values():
         facts = []
@@ -94,7 +98,8 @@ def _site_data(tree, home, photo_path, title):
         for family, _link in tree.parent_families(person.id):
             siblings += [c for c in family.child_ids if c != person.id and c in tree.people and c not in siblings]
         cited = []
-        for fact in [person.birth, person.death, *person_events(person)]:
+        marriages = [family_marriage(family) for family in tree.families_of(person.id)]
+        for fact in [person.birth, person.death, *person_events(person), *marriages, *person_names(person)]:
             for citation in fact_details(fact).get("citations", []) if fact else []:
                 text = sources.get(citation["source"], "")
                 if citation.get("page"):
@@ -107,7 +112,7 @@ def _site_data(tree, home, photo_path, title):
             "facts": facts, "parents": parents, "partners": partners, "children": children,
             "siblings": siblings, "story": person_story(person), "notes": person.notes,
             "names": [f"{n['given']} {n['surname']}".strip() for n in person_names(person)],
-            "sources": cited, "search": fold_text(" ".join([person.display_name] + [
+            "sources": cited, "search": fold_text(" ".join([person.display_name, person.full_name, person.birth_surname] + [
                 f"{n['given']} {n['surname']}" for n in person_names(person)])),
         }
     words = {key: t(key) for key in (
@@ -117,7 +122,8 @@ def _site_data(tree, home, photo_path, title):
     words["web_made"] = t("web_made", date=datetime.date.today().strftime("%d.%m.%Y"))
     import strings
     return {"title": title or t("window_title"), "home": home if home in people else next(iter(people), None),
-            "people": people, "words": words, "lang": strings.LANGUAGE.replace("_", "-")}
+            "people": people, "words": words, "lang": strings.LANGUAGE.replace("_", "-"),
+            "rtl": strings.right_to_left()}
 
 
 def encrypt(data, password):
@@ -127,7 +133,7 @@ def encrypt(data, password):
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     salt, iv = os.urandom(16), os.urandom(12)
     key = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=PBKDF2_ROUNDS).derive(
-        password.encode("utf-8"))
+        unicodedata.normalize("NFC", password).encode("utf-8"))  # "Š" typed either way opens it.
     sealed = AESGCM(key).encrypt(iv, data, None)
     return {"salt": base64.b64encode(salt).decode(), "iv": base64.b64encode(iv).decode(),
             "rounds": PBKDF2_ROUNDS, "data": base64.b64encode(sealed).decode()}
@@ -152,13 +158,17 @@ def page(data, password=None):
     else:
         payload = {"open": data}
         title = data["title"]
-    blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    # Every "<" as \u003c: then no text in the tree ("</script>", or "<!--" with a later
+    # "<script") can end or bend the page's own script. Valid in JSON and in JavaScript.
+    blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
     words = json.dumps({key: t(key) for key in ("web_password", "web_open", "web_wrong_password", "web_locked")},
                        ensure_ascii=False)
     import branding
     return (TEMPLATE.replace("__TITLE__", html.escape(title)).replace("__ICON__", branding.small_icon_uri())
             .replace("__LANG__", html.escape(data.get("lang", "en")))
-            .replace("__WORDS__", words.replace("</", "<\\/"))
+            .replace("__DIR__", "rtl" if data.get("rtl") else "ltr")
+            .replace("__FOLD__", json.dumps(FOLD_LETTERS, ensure_ascii=False))
+            .replace("__WORDS__", words.replace("<", "\\u003c"))
             .replace("__DATA__", blob))
 
 
@@ -180,9 +190,25 @@ class LiveShare:
         body = page(data).encode("utf-8")
         share = self
 
+        self.stopped = False
+        self.connections = set()
+
         class Handler(BaseHTTPRequestHandler):
+            timeout = 15  # A device that connects and says nothing is let go.
+
+            def setup(self):
+                super().setup()
+                share.connections.add(self.connection)
+
+            def finish(self):
+                share.connections.discard(self.connection)
+                try:
+                    super().finish()
+                except OSError:
+                    pass  # The phone hung up: nothing to tell anyone.
+
             def do_GET(self):  # noqa: N802 - the name http.server calls.
-                if self.path.split("?")[0] != f"/{share.token}":
+                if share.stopped or self.path.split("?")[0] != f"/{share.token}":
                     self.send_error(404)
                     return
                 share.views += 1
@@ -198,6 +224,7 @@ class LiveShare:
                 pass  # Nothing written to the console or to files.
 
         self.server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        self.server.handle_error = lambda request, address: None  # No tracebacks for dropped phones.
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -218,10 +245,18 @@ class LiveShare:
 
     def stop(self):
         """Safe to call more than once."""
+        self.stopped = True  # A request still on its way is refused, not answered.
         if self.thread is not None:
             self.server.shutdown()
             self.server.server_close()
             self.thread = None
+        for connection in list(self.connections):  # Connections already open end now too.
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+                connection.close()
+            except OSError:
+                pass
+        self.connections.clear()
 
 
 def qr_png(text, scale=6):
@@ -238,7 +273,7 @@ def qr_png(text, scale=6):
 
 
 TEMPLATE = r"""<!doctype html>
-<html lang="__LANG__"><head><meta charset="utf-8">
+<html lang="__LANG__" dir="__DIR__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>__TITLE__</title>
@@ -294,7 +329,7 @@ function el(tag, attrs, ...kids) {
 function b64(text) { return Uint8Array.from(atob(text), c => c.charCodeAt(0)); }
 async function unlock(password) {
   const sealed = PAYLOAD.locked;
-  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password.normalize("NFC")), "PBKDF2", false, ["deriveKey"]);
   const key = await crypto.subtle.deriveKey({name: "PBKDF2", salt: b64(sealed.salt), iterations: sealed.rounds, hash: "SHA-256"},
                                             material, {name: "AES-GCM", length: 256}, false, ["decrypt"]);
   const plain = await crypto.subtle.decrypt({name: "AES-GCM", iv: b64(sealed.iv)}, key, b64(sealed.data));
@@ -313,7 +348,7 @@ function askPassword() {
   field.focus();
 }
 let DATA = null;
-function person(id) { return DATA.people[id]; }
+function person(id) { return Object.prototype.hasOwnProperty.call(DATA.people, id) ? DATA.people[id] : undefined; }
 function card(id, me) {
   const p = person(id); if (!p) return null;
   return el("div", {class: "p" + (me ? " me" : ""), onclick: () => go(id), title: p.name},
@@ -351,8 +386,17 @@ function show(id) {
   window.scrollTo(0, 0);
 }
 function go(id) { location.hash = encodeURIComponent(id); }
-function route() { const id = decodeURIComponent(location.hash.slice(1)); show(person(id) ? id : DATA.home); }
-function fold(text) { return text.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
+function route() {
+  let id = location.hash.slice(1);
+  try { id = decodeURIComponent(id); } catch (error) { id = ""; }  // "#%" typed by hand: just go home.
+  show(person(id) ? id : DATA.home);
+}
+const FOLD = __FOLD__;
+function fold(text) {
+  text = text.toLowerCase();
+  for (const [letter, plain] of Object.entries(FOLD)) text = text.split(letter).join(plain);
+  return text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+}
 function start(data) {
   DATA = data;
   document.title = data.title;

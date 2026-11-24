@@ -329,11 +329,11 @@ class BadFileTests(TempFolder):
         self.assert_refused_untouched('{"format_version": 1, "people": {"a": {"birth": "1900"}}}')
         self.assert_refused_untouched('{"format_version": 1, "families": {"f": {"children": ["a"]}}}')
 
-    def test_invalid_utf8(self):
+    def test_not_utf8_is_read_in_the_windows_encoding(self):
+        # Saved again by an old Windows editor: still readable, not "damaged".
         self.folder.mkdir()
-        (self.folder / "tree.json").write_bytes(b'{"format_version": 1, "x": "\xff"}')
-        with self.assertRaises(TreeLoadError):
-            open_tree(self.folder)
+        (self.folder / "tree.json").write_bytes(b'{"format_version": 1, "people": {"a": {"given": "J\xf6rg"}}}')
+        self.assertEqual(open_tree(self.folder).tree.people["a"].given, "Jörg")
 
     def test_corrupt_view_does_not_block_the_family(self):
         create_tree(self.folder, sample_tree())

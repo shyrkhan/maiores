@@ -86,7 +86,9 @@ class DateTests(unittest.TestCase):
         self.assertEqual(date_from_gedcom("CAL 1921"), "abt 1921")
         self.assertEqual(date_from_gedcom("abt 14 may 1921"), "abt 1921-05-14")
         self.assertEqual(date_from_gedcom("FROM 1880 TO 1885"), "1880/1885")
-        self.assertEqual(date_from_gedcom("BET 2 JAN 1880 AND 3 MAR 1885"), "1880/1885")
+        # Exact dates in a range keep their days (they were cut to the years before 1.4.3).
+        self.assertEqual(date_from_gedcom("BET 2 JAN 1880 AND 3 MAR 1885"), "1880-01-02/1885-03-03")
+        self.assertEqual(date_from_gedcom("BET ABT 1880 AND 1885"), None)
 
     def test_not_understood(self):
         for text in ("Summer of 1920", "14 1921", "31 FOO 1921", "32 JAN 1921", "(unknown)", "510 BC",
@@ -585,8 +587,10 @@ class KeepEverythingTests(GedcomCase):
         import datetime
         import privacy
         shared = privacy.shareable(self.tree, datetime.date(2026, 11, 15), hide_living=False)
-        self.assertNotIn("gedcom_records", shared.extra)
-        self.assertNotIn("Nobody points at me", self.exported(shared))
+        # A loose note stays home; a note shared people point at goes with them.
+        exported = self.exported(shared)
+        self.assertNotIn("Nobody points at me", exported)
+        self.assertIn("A note shared by records", exported)
 
     def test_the_panel_shows_kept_details_but_not_bookkeeping(self):
         from model import kept_details

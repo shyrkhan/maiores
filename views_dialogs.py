@@ -12,9 +12,9 @@ from PySide6.QtWidgets import (
 )
 
 import theme
-from model import fold_text, parse_date, person_documents
+from model import parse_date, person_documents
 from screen import fit_to_screen
-from strings import t
+from strings import collation_key, t
 
 # History shown behind the lifelines: (first year, last year, text key). Wars and the
 # states the family's places belonged to; the user can switch them off.
@@ -31,6 +31,17 @@ ROW, BAR, NAME_W, YEAR_W = 26, 14, 210, 7.0
 def _year(event):
     parsed = parse_date((event or {}).get("date", ""))
     return parsed.year if parsed else None
+
+
+def _decade_year(event):
+    """A year to count a date under by decade: "after 1909" or "before 1900" can't be
+    placed in one (the 1900s or later; any time before), a range only when it lies in one."""
+    parsed = parse_date((event or {}).get("date", ""))
+    if parsed is None or parsed.qualifier in ("bef", "aft", "from", "to"):
+        return None
+    if parsed.end_year is not None and parsed.end_year // 10 != parsed.year // 10:
+        return None
+    return parsed.year
 
 
 def _close(parent, layout):
@@ -56,7 +67,7 @@ def lifeline_rows(tree, people, today):
             rows.append((person_id, person.display_name, born, None, True))
         else:
             rows.append((person_id, person.display_name, born, max(died, born), False))
-    return sorted(rows, key=lambda row: (row[2], fold_text(row[1])))
+    return sorted(rows, key=lambda row: (row[2], collation_key(row[1])))
 
 
 def related(tree, start, kind):
@@ -87,8 +98,11 @@ class LifelinesView(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
 
     def draw(self, rows, history, today):
+        old = self.scene()
         scene = QGraphicsScene(self)
         self.setScene(scene)
+        if old is not None:
+            old.deleteLater()  # Each redraw (History on or off) is a new chart: the last one goes.
         if not rows:
             scene.addText(t("lifelines_empty")).setDefaultTextColor(theme.colour("soft"))
             return
@@ -219,6 +233,7 @@ class GalleryDialog(QDialog):
         self.setWindowTitle(t("gallery_title"))
         fit_to_screen(self, 960, 700)
         self.tree, self.picture_for, self.chosen = tree, picture_for, None
+        self.thumbs = {}  # Stored file -> thumbnail: one group photo of 40 people is read once.
         self.with_documents = QCheckBox(t("gallery_documents"))
         self.with_documents.setChecked(documents_too)
         self.with_documents.toggled.connect(lambda _on: self.fill())
@@ -229,7 +244,7 @@ class GalleryDialog(QDialog):
         self.list.setResizeMode(QListView.ResizeMode.Adjust)
         self.list.setMovement(QListView.Movement.Static)
         self.list.setWordWrap(True)
-        self.list.itemDoubleClicked.connect(self._go)
+        self.list.itemActivated.connect(self._go)
         self.empty = QLabel(t("gallery_empty"))
         self.empty.setWordWrap(True)
         layout = QVBoxLayout(self)
@@ -242,7 +257,7 @@ class GalleryDialog(QDialog):
     def entries(self):
         """[(person id, caption, stored file)] portraits first, then document pictures."""
         found = []
-        people = sorted(self.tree.people.values(), key=lambda p: (fold_text(p.surname), fold_text(p.given)))
+        people = sorted(self.tree.people.values(), key=lambda p: (collation_key(p.surname), collation_key(p.given)))
         for person in people:
             if person.photo:
                 found.append((person.id, person.display_name, person.photo))
@@ -257,10 +272,13 @@ class GalleryDialog(QDialog):
     def fill(self):
         self.list.clear()
         for person_id, caption, stored in self.entries():
-            pixmap = self.picture_for(stored)
-            if pixmap is None or pixmap.isNull():
+            if stored not in self.thumbs:
+                pixmap = self.picture_for(stored)
+                self.thumbs[stored] = None if pixmap is None or pixmap.isNull() else pixmap.scaled(
+                    150, 180, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            thumb = self.thumbs[stored]
+            if thumb is None:
                 continue
-            thumb = pixmap.scaled(150, 180, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             item = QListWidgetItem(QIcon(thumb), caption)
             item.setData(Qt.ItemDataRole.UserRole, person_id)
             item.setToolTip(caption)
@@ -278,15 +296,16 @@ def statistics(tree, today=None):
     """Numbers for the statistics page."""
     today = today or datetime.date.today()
     people = list(tree.people.values())
-    births = [_year(p.birth) for p in people if _year(p.birth)]
+    births = [_decade_year(p.birth) for p in people if _decade_year(p.birth)]
     decades = collections.Counter(year // 10 * 10 for year in births)
     lifespans = collections.defaultdict(list)
     for person in people:
         born, died = _year(person.birth), _year(person.death)
         if born and died and died >= born:
             lifespans[born // 100 * 100].append(died - born)
+    # The surname each was born with: the family names of the tree, as the overview counts too.
     surnames = collections.Counter((p.birth_surname or p.surname).strip() for p in people
-                                   if (p.birth_surname or p.surname).strip())
+                                   if (p.birth_surname or p.surname).strip() and not p.extra.get("hidden"))
     given = collections.Counter(p.given.split()[0] for p in people if p.given.strip() and not p.extra.get("hidden"))
     return {
         "people": len(people), "living": sum(1 for p in people if p.living == "yes"),

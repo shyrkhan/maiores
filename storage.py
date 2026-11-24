@@ -6,6 +6,7 @@
       media/      photos
       backups/    dated copies of tree.json and view.json
 """
+import errno
 import json
 import os
 import shutil
@@ -90,7 +91,7 @@ def atomic_write(path, text):
     path = Path(path)
     data = text.encode("utf-8")
     handle, temp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        prefix=f".{short_name(path)}.", suffix=".tmp", dir=path.parent
     )
     try:
         with os.fdopen(handle, "wb") as temp:
@@ -109,13 +110,47 @@ def atomic_write(path, text):
         pass  # The new file is already in place: reporting a failure now would be untrue.
 
 
+def short_name(path, keep=60):
+    """A file's name cut short for a working file beside it, its ending kept: the system
+    allows 255 characters, and a long name with a prefix and suffix added would pass that."""
+    path = Path(path)
+    return path.stem[:keep] + path.suffix[:16]
+
+
 def temp_beside(path):
     """A new, empty file with a name no one else has, beside `path`: a replacement is written
     there and then moved over `path`. A fixed name (".family.pdf.tmp") could be a file of
     the person's own, overwritten and then deleted."""
-    handle, name = tempfile.mkstemp(prefix=f".{Path(path).name}.", suffix=".tmp", dir=Path(path).parent)
+    handle, name = tempfile.mkstemp(prefix=f".{short_name(path)}.", suffix=".tmp", dir=Path(path).parent)
     os.close(handle)
     return Path(name)
+
+
+def check_written(path):
+    """Raise OSError when a PDF or OpenDocument file written by Qt is not complete. Qt's
+    writers report no error when the disk fills up: they leave a file cut short, which
+    must never replace the good one the person already has."""
+    import zipfile
+    path = Path(path)
+    data_size = path.stat().st_size
+    suffix = path.suffix.lower()
+    if suffix == ".tmp":  # temp_beside's name: ".family.pdf.x1y2.tmp" -> ".pdf".
+        suffix = Path(path.name[:-len(".tmp")].rsplit(".", 1)[0]).suffix.lower()
+    complete = data_size > 0
+    if complete and suffix == ".pdf":
+        with open(path, "rb") as handle:
+            handle.seek(max(0, data_size - 1024))
+            complete = b"%%EOF" in handle.read()
+    elif complete and suffix == ".odt":
+        try:
+            with zipfile.ZipFile(path) as archive:
+                complete = archive.testzip() is None
+        except (zipfile.BadZipFile, OSError):
+            complete = False
+    if not complete:
+        raise OSError(errno.ENOSPC, t("write_incomplete"))
+    with open(path, "rb") as handle:  # Make sure it is on the disk before it replaces anything.
+        os.fsync(handle.fileno())
 
 
 def _sync_directory(directory):
@@ -133,13 +168,38 @@ def _to_json(data):
     return json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
 
 
+def _whole_letters(value):
+    """A hand-edited file may hold half of an emoji ("\\ud83d"): it can be read, but no
+    file can be written with it, so every later save would fail. It becomes "\ufffd"."""
+    if isinstance(value, str):
+        return "".join("\ufffd" if "\ud800" <= c <= "\udfff" else c for c in value) \
+            if any("\ud800" <= c <= "\udfff" for c in value) else value
+    if isinstance(value, list):
+        return [_whole_letters(item) for item in value]
+    if isinstance(value, dict):
+        return {_whole_letters(key): _whole_letters(item) for key, item in value.items()}
+    return value
+
+
 def _read_json(path):
     try:
         data = Path(path).read_bytes()
     except OSError as error:
         raise TreeLoadError(t("error_unreadable", name=Path(path).name, detail=error)) from error
     try:
-        return json.loads(data.decode("utf-8"))
+        # "utf-8-sig": a Windows editor saves UTF-8 with a mark in front, and the file is
+        # still perfectly readable. NaN and Infinity are no numbers JSON can be saved with
+        # again: read as nothing, so the tree can still be saved.
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            # Saved again by an old Windows editor in its own encoding: still readable. The
+            # Central European one where those languages are used (Š, Ć, Ł, Ř), else the
+            # Western one; it is written back as UTF-8 at the next save.
+            import strings
+            central = strings.LANGUAGE in ("hr", "pl", "cs", "sk", "sl", "hu", "ro", "sr", "bs")
+            text = data.decode("cp1250" if central else "cp1252", errors="replace")
+        return _whole_letters(json.loads(text, parse_constant=lambda _name: None))
     except ValueError as error:  # Not JSON, or not UTF-8: the file itself is damaged.
         raise DamagedTreeError(t("error_unreadable", name=Path(path).name, detail=error)) from error
 
@@ -181,23 +241,35 @@ def make_backup(folder, keep=BACKUP_KEEP):
         shutil.rmtree(temp, ignore_errors=True)
         raise
     for old in _backups(folder)[:-keep]:
-        shutil.rmtree(old)
+        # An old backup that can't be removed (read-only, in use) is only clutter: it
+        # must never stop the tree itself from being saved.
+        try:
+            shutil.rmtree(old)
+        except OSError:
+            pass
     return target
 
 
 def list_backups(folder):
-    """Readable backups, newest first, as (folder, time, number of people)."""
+    """Backups this program can open, newest first, as (folder, time, number of people).
+    Each is read exactly as recovering it would read it, so one that would fail (no format
+    version, a newer program's, a damaged record) is never offered."""
     found = []
     for backup in reversed(_backups(folder)):
         try:
-            data = json.loads((backup / TREE_FILE).read_text(encoding="utf-8"))
-            tree = Tree.from_dict(data)
+            tree = read_backup(backup)
             when = time.localtime((backup / TREE_FILE).stat().st_mtime)
-        except (OSError, ValueError, TreeFormatError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, TreeLoadError, TreeFormatError):
             continue
-        if data.get("format_version", 0) <= FORMAT_VERSION:
-            found.append((backup, when, len(tree.people)))
+        found.append((backup, when, len(tree.people)))
     return found
+
+
+def has_tree(folder):
+    """A tree folder: its tree.json, or, with that file gone, backups to recover it from."""
+    folder = Path(folder)
+    tree_file = folder / TREE_FILE
+    return tree_file.is_file() or (not tree_file.exists() and bool(_backups(folder)))
 
 
 def read_backup(backup):
@@ -297,6 +369,7 @@ def recover_from_backup(folder, backup):
     it (never deleted), and photos, documents and the other backups are left alone."""
     folder = Path(folder)
     tree_file = folder / TREE_FILE
+    read_backup(backup)  # Raises if it can't be opened: nothing is replaced then.
     text = (Path(backup) / TREE_FILE).read_text(encoding="utf-8")
     if tree_file.exists():
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -330,12 +403,18 @@ def read_tree(folder):
 def create_tree(folder, tree):
     """Make a new tree folder. Refuses to replace an existing tree."""
     folder = Path(folder)
-    folder.mkdir(parents=True, exist_ok=True)
-    if (folder / TREE_FILE).exists():
-        raise FileExistsError(folder / TREE_FILE)
-    (folder / MEDIA_DIR).mkdir(exist_ok=True)
-    (folder / BACKUP_DIR).mkdir(exist_ok=True)
-    atomic_write(folder / TREE_FILE, _to_json(tree.to_dict()))
+    if has_tree(folder) or (folder / TREE_FILE).exists():
+        raise FileExistsError(folder / TREE_FILE)  # Also a tree whose file is gone but whose backups remain.
+    made = not folder.exists()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / MEDIA_DIR).mkdir(exist_ok=True)
+        (folder / BACKUP_DIR).mkdir(exist_ok=True)
+        atomic_write(folder / TREE_FILE, _to_json(tree.to_dict()))
+    except OSError:
+        if made:  # A half-made tree folder (a full disk) would only be in the way of the retry.
+            shutil.rmtree(folder, ignore_errors=True)
+        raise
 
 
 def save_tree(folder, tree):
