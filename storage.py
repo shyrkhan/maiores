@@ -149,8 +149,8 @@ def check_written(path):
             complete = False
     if not complete:
         raise OSError(errno.ENOSPC, t("write_incomplete"))
-    with open(path, "rb") as handle:  # Make sure it is on the disk before it replaces anything.
-        os.fsync(handle.fileno())
+    with open(path, "r+b") as handle:  # Make sure it is on the disk before it replaces anything.
+        os.fsync(handle.fileno())  # Windows flushes only a file opened for writing.
 
 
 def _sync_directory(directory):

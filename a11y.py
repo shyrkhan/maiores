@@ -1,7 +1,9 @@
 """Names for screen readers, given to every window as it opens: a field in a form takes
 its label's text, a field with only grey example text takes that, and a list or table
 the window's title. Done in one place, so a new window can't be forgotten."""
-from PySide6.QtCore import QEvent, QObject
+import sys
+
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QAbstractSpinBox, QComboBox, QDialog, QFormLayout, QLabel, QLineEdit, QPlainTextEdit,
     QSlider, QTextEdit, QWidget,
@@ -65,11 +67,27 @@ def form_tab_order(window):
                 QWidget.setTabOrder(first, second)
 
 
+# On a Mac, Enter in a list starts editing instead of opening the item, as it does elsewhere.
+ENTER_OPENS = sys.platform == "darwin"
+
+
+def _enter_opens(view, event):
+    if (event.key() not in (Qt.Key.Key_Return, Qt.Key.Key_Enter) or event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+            or view.window().windowType() == Qt.WindowType.Popup  # A pop-up's own Enter chooses.
+            or view.state() == QAbstractItemView.State.EditingState):
+        return
+    index = view.currentIndex()
+    if index.isValid() and not index.flags() & Qt.ItemFlag.ItemIsEditable:
+        view.activated.emit(index)
+
+
 class _Namer(QObject):
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.Show and isinstance(watched, QDialog):
             name_fields(watched)
             form_tab_order(watched)
+        elif ENTER_OPENS and event.type() == QEvent.Type.KeyPress and isinstance(watched, QAbstractItemView):
+            _enter_opens(watched, event)
         return False
 
 

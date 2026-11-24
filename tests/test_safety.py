@@ -948,7 +948,7 @@ class DocumentResearchTests(WindowCase):
         self.assertEqual(sorted(d["title"] for d in stored), ["one", "three", "two"])
         single = QMimeData()
         single.setUrls([QUrl.fromLocalFile(str(files[0]))])
-        self.assertEqual(TreeView.dropped_file(single), str(files[0]))
+        self.assertEqual(Path(TreeView.dropped_file(single)), files[0])
 
     def test_unsourced_list_counts_an_address_or_a_cause(self):
         from facts_dialogs import unsourced_facts

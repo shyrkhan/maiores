@@ -244,6 +244,13 @@ def centre_page(text, buttons):
     return page
 
 
+def _readable_picture(path):
+    """Whether this computer can really show the picture: a Mac claims every .heic, but
+    gives up on some when it reads them."""
+    reader = QImageReader(path)
+    return reader.canRead() and not reader.read().isNull()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, settings=None, today=None):
         super().__init__()
@@ -3324,7 +3331,7 @@ class MainWindow(QMainWindow):
             self.attach_documents(person_id, picture)  # Several files: every one is attached.
             return
         if isinstance(picture, str) and (Path(picture).suffix.lower() not in PICTURE_SUFFIXES
-                                         or not QImageReader(picture).canRead() and documents.is_allowed(picture)):
+                                         or not _readable_picture(picture) and documents.is_allowed(picture)):
             # A picture this computer cannot show (an iPhone .heic, say) is still kept, as a document.
             self.attach_documents(person_id, [picture])
             return
